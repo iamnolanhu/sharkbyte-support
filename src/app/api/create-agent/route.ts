@@ -12,6 +12,7 @@ import {
   generateCrawlKBName,
   findAgentByDomain,
   getDefaultInstruction,
+  getKnowledgeBaseIds,
 } from '@/lib/digitalocean';
 import type { CreateAgentRequest, CreateAgentApiResponse } from '@/types';
 
@@ -48,12 +49,13 @@ export async function POST(request: NextRequest) {
                        keyResponse.access_key?.key ||
                        keyResponse.access_key?.api_key || '';
 
+      const kbIds = getKnowledgeBaseIds(agent);
       const response: CreateAgentApiResponse = {
         success: true,
         agentId: agent.uuid,
         agentName: agent.name,
-        kbId: agent.knowledge_base_ids[0] || '',
-        kbIds: agent.knowledge_base_ids || [],
+        kbId: kbIds[0] || '',
+        kbIds,
         endpoint: agent.endpoint || '',
         accessKey,
         isExisting: true,

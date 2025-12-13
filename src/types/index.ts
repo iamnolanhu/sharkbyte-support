@@ -58,7 +58,10 @@ export interface Agent {
   model_uuid: string;
   project_id: string;
   region: string;
-  knowledge_base_ids: string[];
+  // DO API may return different field names for KB IDs
+  knowledge_base_ids?: string[];
+  knowledge_base_uuid?: string;
+  knowledge_base_uuids?: string[];
   endpoint?: string;
   deployment?: {
     url?: string;

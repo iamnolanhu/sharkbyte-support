@@ -3,6 +3,7 @@
  */
 
 import type {
+  Agent,
   CreateKBResponse,
   GetKBResponse,
   ListKBResponse,
@@ -12,6 +13,14 @@ import type {
   CreateAccessKeyResponse,
 } from '@/types';
 import { DO_CONFIG, CRAWLER_CONFIG } from './config';
+
+// Normalize KB IDs from various API response field names
+export function getKnowledgeBaseIds(agent: Agent): string[] {
+  if (agent.knowledge_base_ids?.length) return agent.knowledge_base_ids;
+  if (agent.knowledge_base_uuids?.length) return agent.knowledge_base_uuids;
+  if (agent.knowledge_base_uuid) return [agent.knowledge_base_uuid];
+  return [];
+}
 
 function getHeaders(): HeadersInit {
   return {
@@ -525,7 +534,7 @@ export async function updateAgentVisibility(
 // Delete agent and all its associated KBs
 export async function deleteAgentWithKBs(agentId: string): Promise<void> {
   const agentResponse = await getAgent(agentId);
-  const kbIds = agentResponse.agent.knowledge_base_ids || [];
+  const kbIds = getKnowledgeBaseIds(agentResponse.agent);
 
   // Delete agent first
   await deleteAgent(agentId);
