@@ -127,7 +127,7 @@ export default function Home() {
   ] as const;
 
   return (
-    <main className="relative min-h-screen flex flex-col items-center justify-center p-8">
+    <main className="relative min-h-screen flex flex-col items-center justify-center px-4 py-8 sm:p-8">
       <WaveBackground />
 
       <div className="absolute top-4 right-4 z-10">
@@ -141,19 +141,19 @@ export default function Home() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="flex flex-col items-center gap-8"
+            className="flex flex-col items-center gap-6 sm:gap-8 w-full max-w-3xl"
           >
             {/* Hero */}
             <motion.div
-              className="text-center space-y-4"
+              className="text-center space-y-3 sm:space-y-4"
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
             >
-              <SammyAvatar size="hero" className="mx-auto mb-4" />
-              <h1 className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-[var(--do-blue)] to-[var(--do-teal)] bg-clip-text text-transparent">
+              <SammyAvatar size="xl" className="mx-auto mb-2 sm:mb-4 sm:w-32 sm:h-32 md:w-40 md:h-40" />
+              <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold bg-gradient-to-r from-[var(--do-blue)] to-[var(--do-teal)] bg-clip-text text-transparent leading-tight">
                 SharkByte Support
               </h1>
-              <p className="text-xl text-muted-foreground max-w-lg">
+              <p className="text-base sm:text-lg md:text-xl text-muted-foreground max-w-lg mx-auto px-2">
                 Transform any website into an AI-powered support agent in seconds
               </p>
             </motion.div>
@@ -166,7 +166,7 @@ export default function Home() {
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 max-w-md"
+                className="p-4 rounded-lg bg-destructive/10 border border-destructive/20 max-w-md mx-4"
               >
                 <p className="text-sm text-destructive">{error}</p>
                 <button
@@ -184,29 +184,29 @@ export default function Home() {
 
             {/* Features */}
             <motion.div
-              className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8 max-w-3xl"
+              className="grid grid-cols-3 gap-2 sm:gap-4 mt-4 sm:mt-8 w-full px-2"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.4 }}
             >
               {[
-                { title: 'Instant Setup', desc: 'Just paste your URL' },
-                { title: 'AI-Powered', desc: 'Trained on your content' },
-                { title: '24/7 Support', desc: 'Always available' },
+                { title: 'Instant', desc: 'Just paste URL' },
+                { title: 'AI-Powered', desc: 'Your content' },
+                { title: '24/7', desc: 'Always on' },
               ].map((feature, i) => (
                 <div
                   key={i}
-                  className="p-4 rounded-xl bg-card/50 backdrop-blur-sm border border-border text-center"
+                  className="p-2 sm:p-4 rounded-lg sm:rounded-xl bg-card/50 backdrop-blur-sm border border-border text-center"
                 >
-                  <h3 className="font-semibold text-foreground">{feature.title}</h3>
-                  <p className="text-sm text-muted-foreground">{feature.desc}</p>
+                  <h3 className="text-xs sm:text-sm md:text-base font-semibold text-foreground">{feature.title}</h3>
+                  <p className="text-[10px] sm:text-xs md:text-sm text-muted-foreground">{feature.desc}</p>
                 </div>
               ))}
             </motion.div>
 
             {/* Footer */}
             <motion.p
-              className="text-sm text-muted-foreground/60 mt-8"
+              className="text-xs sm:text-sm text-muted-foreground/60 mt-4 sm:mt-8"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.6 }}
@@ -220,6 +220,7 @@ export default function Home() {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
+            className="w-full px-4"
           >
             <ProgressIndicator steps={getProgressSteps()} error={error} />
           </motion.div>

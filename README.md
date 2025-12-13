@@ -1,4 +1,4 @@
-# SharkByte Support
+<h1 align="center">SharkByte Support</h1>
 
 <p align="center">
   <img src="./public/sammy/transparent/sammy-animated-transparent.gif" alt="Sammy the Shark" width="200" />
