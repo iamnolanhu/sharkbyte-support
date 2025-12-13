@@ -15,9 +15,10 @@ export const DO_CONFIG = {
   DEFAULT_EMBEDDING_MODEL_UUID:
     process.env.DO_EMBEDDING_MODEL_UUID || '22653204-79ed-11ef-bf8f-4e013e2ddde4',
 
-  // Default LLM model UUID (GPT-4o)
+  // Default LLM model UUID (OpenAI GPT-oss-120b - works via API)
+  // Note: gpt-4o (9a364867-f300-11ef-bf8f-4e013e2ddde4) does NOT work via API
   DEFAULT_LLM_MODEL_UUID:
-    process.env.DO_LLM_MODEL_UUID || '9a364867-f300-11ef-bf8f-4e013e2ddde4',
+    process.env.DO_LLM_MODEL_UUID || '18bc9b8f-73c5-11f0-b074-4e013e2ddde4',
 
   // Project ID (required)
   get PROJECT_ID() {
