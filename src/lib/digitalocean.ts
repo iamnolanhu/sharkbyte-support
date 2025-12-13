@@ -11,16 +11,11 @@ import type {
   GetAgentResponse,
   CreateAccessKeyResponse,
 } from '@/types';
-
-const DO_API_BASE = 'https://api.digitalocean.com/v2';
+import { DO_CONFIG, CRAWLER_CONFIG } from './config';
 
 function getHeaders(): HeadersInit {
-  const token = process.env.DO_API_TOKEN;
-  if (!token) {
-    throw new Error('DO_API_TOKEN environment variable is not set');
-  }
   return {
-    Authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${DO_CONFIG.API_TOKEN}`,
     'Content-Type': 'application/json',
   };
 }
@@ -77,40 +72,39 @@ export async function createKnowledgeBaseSmartCrawl(
   // Build request body
   const requestBody: Record<string, unknown> = {
     name: options.name,
-    embedding_model_uuid:
-      process.env.DO_EMBEDDING_MODEL_UUID ||
-      '22653204-79ed-11ef-bf8f-4e013e2ddde4',
-    project_id: process.env.DO_PROJECT_ID,
-    region: process.env.DO_REGION || 'tor1',
+    embedding_model_uuid: DO_CONFIG.DEFAULT_EMBEDDING_MODEL_UUID,
+    project_id: DO_CONFIG.PROJECT_ID,
+    region: DO_CONFIG.DEFAULT_REGION,
     datasources: [
       {
         web_crawler_data_source: {
           base_url: crawlConfig.base_url,
           crawling_option: crawlConfig.crawling_option,
-          embed_media: false,
-          exclude_tags: [
-            'nav',
-            'footer',
-            'header',
-            'aside',
-            'script',
-            'style',
-            'form',
-            'iframe',
-            'noscript',
-          ],
+          embed_media: CRAWLER_CONFIG.EMBED_MEDIA,
+          exclude_tags: CRAWLER_CONFIG.EXCLUDE_TAGS,
         },
       },
     ],
   };
 
   // Add database_id if provided (reuse existing database)
-  const databaseId = options.databaseId || process.env.DO_DATABASE_ID;
+  // Note: Only include database_id if explicitly provided via options
+  // If DO_CONFIG.DATABASE_ID is set but invalid, it will cause errors
+  // So we only use it if explicitly passed in options
+  const databaseId = options.databaseId;
   if (databaseId) {
     requestBody.database_id = databaseId;
+    console.log(`Using provided database_id: ${databaseId}`);
+  } else if (DO_CONFIG.DATABASE_ID) {
+    // Only use env DATABASE_ID if no option is provided
+    // This allows auto-provisioning if env var is not set
+    requestBody.database_id = DO_CONFIG.DATABASE_ID;
+    console.log(`Using DATABASE_ID from config: ${DO_CONFIG.DATABASE_ID}`);
+  } else {
+    console.log('No database_id provided - will auto-provision');
   }
 
-  const response = await fetch(`${DO_API_BASE}/gen-ai/knowledge_bases`, {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify(requestBody),
@@ -118,6 +112,22 @@ export async function createKnowledgeBaseSmartCrawl(
 
   if (!response.ok) {
     const error = await response.json();
+    const errorMessage = error.message || error.id || 'Unknown error';
+    
+    // Provide helpful error message for database not found
+    if (error.id === 'not_found' && errorMessage.includes('vector database')) {
+      const usedDatabaseId = databaseId || DO_CONFIG.DATABASE_ID;
+      throw new Error(
+        `Knowledge Base creation failed: The vector database (ID: ${usedDatabaseId}) does not exist.\n` +
+        `This usually means:\n` +
+        `1. The DO_DATABASE_ID environment variable is set to an invalid/non-existent database ID\n` +
+        `2. The database was deleted or the ID is incorrect\n` +
+        `\nSolution: Either remove DO_DATABASE_ID from your environment to allow auto-provisioning, ` +
+        `or set it to a valid database ID.\n` +
+        `\nError details: ${JSON.stringify(error)}`
+      );
+    }
+
     throw new Error(`Knowledge Base creation failed: ${JSON.stringify(error)}`);
   }
 
@@ -130,40 +140,39 @@ export async function createKnowledgeBase(
   // Build request body, optionally including database_id
   const requestBody: Record<string, unknown> = {
     name: options.name,
-    embedding_model_uuid:
-      process.env.DO_EMBEDDING_MODEL_UUID ||
-      '22653204-79ed-11ef-bf8f-4e013e2ddde4',
-    project_id: process.env.DO_PROJECT_ID,
-    region: process.env.DO_REGION || 'tor1',
+    embedding_model_uuid: DO_CONFIG.DEFAULT_EMBEDDING_MODEL_UUID,
+    project_id: DO_CONFIG.PROJECT_ID,
+    region: DO_CONFIG.DEFAULT_REGION,
     datasources: [
       {
         web_crawler_data_source: {
           base_url: options.seedUrls[0],
           crawling_option: 'DOMAIN',
-          embed_media: false,
-          exclude_tags: [
-            'nav',
-            'footer',
-            'header',
-            'aside',
-            'script',
-            'style',
-            'form',
-            'iframe',
-            'noscript',
-          ],
+          embed_media: CRAWLER_CONFIG.EMBED_MEDIA,
+          exclude_tags: CRAWLER_CONFIG.EXCLUDE_TAGS,
         },
       },
     ],
   };
 
   // Add database_id if provided (reuse existing database)
-  const databaseId = options.databaseId || process.env.DO_DATABASE_ID;
+  // Note: Only include database_id if explicitly provided via options
+  // If DO_CONFIG.DATABASE_ID is set but invalid, it will cause errors
+  // So we only use it if explicitly passed in options
+  const databaseId = options.databaseId;
   if (databaseId) {
     requestBody.database_id = databaseId;
+    console.log(`Using provided database_id: ${databaseId}`);
+  } else if (DO_CONFIG.DATABASE_ID) {
+    // Only use env DATABASE_ID if no option is provided
+    // This allows auto-provisioning if env var is not set
+    requestBody.database_id = DO_CONFIG.DATABASE_ID;
+    console.log(`Using DATABASE_ID from config: ${DO_CONFIG.DATABASE_ID}`);
+  } else {
+    console.log('No database_id provided - will auto-provision');
   }
 
-  const response = await fetch(`${DO_API_BASE}/gen-ai/knowledge_bases`, {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify(requestBody),
@@ -171,6 +180,22 @@ export async function createKnowledgeBase(
 
   if (!response.ok) {
     const error = await response.json();
+    const errorMessage = error.message || error.id || 'Unknown error';
+    
+    // Provide helpful error message for database not found
+    if (error.id === 'not_found' && errorMessage.includes('vector database')) {
+      const usedDatabaseId = databaseId || DO_CONFIG.DATABASE_ID;
+      throw new Error(
+        `Knowledge Base creation failed: The vector database (ID: ${usedDatabaseId}) does not exist.\n` +
+        `This usually means:\n` +
+        `1. The DO_DATABASE_ID environment variable is set to an invalid/non-existent database ID\n` +
+        `2. The database was deleted or the ID is incorrect\n` +
+        `\nSolution: Either remove DO_DATABASE_ID from your environment to allow auto-provisioning, ` +
+        `or set it to a valid database ID.\n` +
+        `\nError details: ${JSON.stringify(error)}`
+      );
+    }
+
     throw new Error(`Knowledge Base creation failed: ${JSON.stringify(error)}`);
   }
 
@@ -179,7 +204,7 @@ export async function createKnowledgeBase(
 
 export async function getKnowledgeBase(kbId: string): Promise<GetKBResponse> {
   const response = await fetch(
-    `${DO_API_BASE}/gen-ai/knowledge_bases/${kbId}`,
+    `${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases/${kbId}`,
     {
       headers: getHeaders(),
     }
@@ -194,7 +219,7 @@ export async function getKnowledgeBase(kbId: string): Promise<GetKBResponse> {
 }
 
 export async function listKnowledgeBases(): Promise<ListKBResponse> {
-  const response = await fetch(`${DO_API_BASE}/gen-ai/knowledge_bases`, {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases`, {
     headers: getHeaders(),
   });
 
@@ -208,7 +233,7 @@ export async function listKnowledgeBases(): Promise<ListKBResponse> {
 
 export async function deleteKnowledgeBase(kbId: string): Promise<void> {
   const response = await fetch(
-    `${DO_API_BASE}/gen-ai/knowledge_bases/${kbId}`,
+    `${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases/${kbId}`,
     {
       method: 'DELETE',
       headers: getHeaders(),
@@ -222,7 +247,7 @@ export async function deleteKnowledgeBase(kbId: string): Promise<void> {
 }
 
 export async function startIndexingJob(kbId: string): Promise<void> {
-  const response = await fetch(`${DO_API_BASE}/gen-ai/indexing_jobs`, {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/indexing_jobs`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({
@@ -293,7 +318,7 @@ export async function attachKnowledgeBaseToAgent(
   kbId: string
 ): Promise<void> {
   const response = await fetch(
-    `${DO_API_BASE}/gen-ai/agents/${agentId}/knowledge_bases/${kbId}`,
+    `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/knowledge_bases/${kbId}`,
     {
       method: 'POST',
       headers: getHeaders(),
@@ -332,24 +357,60 @@ Guidelines:
 export async function createAgent(
   options: CreateAgentOptions
 ): Promise<CreateAgentResponse> {
-  const response = await fetch(`${DO_API_BASE}/gen-ai/agents`, {
+  const requestBody = {
+    name: options.name,
+    model_uuid: DO_CONFIG.DEFAULT_LLM_MODEL_UUID,
+    project_id: DO_CONFIG.PROJECT_ID,
+    region: DO_CONFIG.DEFAULT_REGION,
+    knowledge_base_ids: options.knowledgeBaseIds,
+    instruction: options.instruction,
+    ...(options.description && { description: options.description }),
+  };
+
+  // Log request details (without sensitive data) for debugging
+  console.log('Creating agent with:', {
+    name: requestBody.name,
+    project_id: requestBody.project_id,
+    region: requestBody.region,
+    model_uuid: requestBody.model_uuid,
+    knowledge_base_count: requestBody.knowledge_base_ids.length,
+  });
+
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/agents`, {
     method: 'POST',
     headers: getHeaders(),
-    body: JSON.stringify({
-      name: options.name,
-      model_uuid:
-        process.env.DO_LLM_MODEL_UUID || '9a364867-f300-11ef-bf8f-4e013e2ddde4',
-      project_id: process.env.DO_PROJECT_ID,
-      region: process.env.DO_REGION || 'tor1',
-      knowledge_base_ids: options.knowledgeBaseIds,
-      instruction: options.instruction,
-      ...(options.description && { description: options.description }),
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(`Agent creation failed: ${JSON.stringify(error)}`);
+    const statusText = response.statusText;
+    const status = response.status;
+    
+    // Provide more detailed error information
+    const errorMessage = error.message || error.id || 'Unknown error';
+    const errorDetails = {
+      status,
+      statusText,
+      errorId: error.id,
+      errorMessage,
+      projectId: DO_CONFIG.PROJECT_ID,
+      hasApiToken: !!DO_CONFIG.API_TOKEN,
+    };
+
+    // If it's a permission error, provide helpful guidance
+    if (status === 403 || error.id === 'forbidden' || errorMessage.includes('PermissionDenied')) {
+      throw new Error(
+        `Agent creation failed with PermissionDenied error. ` +
+        `This usually means:\n` +
+        `1. The API token (DO_API_TOKEN) doesn't have permission to create agents\n` +
+        `2. The project ID (DO_PROJECT_ID: ${DO_CONFIG.PROJECT_ID}) is incorrect or the token doesn't have access to it\n` +
+        `3. The API token may need to be regenerated with proper permissions\n` +
+        `\nError details: ${JSON.stringify(errorDetails)}`
+      );
+    }
+
+    throw new Error(`Agent creation failed: ${JSON.stringify(errorDetails)}`);
   }
 
   return response.json();
@@ -357,7 +418,7 @@ export async function createAgent(
 
 // List all agents in the project
 export async function listAgents(): Promise<GetAgentResponse['agent'][]> {
-  const response = await fetch(`${DO_API_BASE}/gen-ai/agents`, {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/agents`, {
     headers: getHeaders(),
   });
 
@@ -384,7 +445,7 @@ export async function findAgentByDomain(
 }
 
 export async function getAgent(agentId: string): Promise<GetAgentResponse> {
-  const response = await fetch(`${DO_API_BASE}/gen-ai/agents/${agentId}`, {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}`, {
     headers: getHeaders(),
   });
 
@@ -397,7 +458,7 @@ export async function getAgent(agentId: string): Promise<GetAgentResponse> {
 }
 
 export async function deleteAgent(agentId: string): Promise<void> {
-  const response = await fetch(`${DO_API_BASE}/gen-ai/agents/${agentId}`, {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}`, {
     method: 'DELETE',
     headers: getHeaders(),
   });
@@ -408,15 +469,78 @@ export async function deleteAgent(agentId: string): Promise<void> {
   }
 }
 
+// Update agent properties (instruction, name, etc.)
+// Note: visibility is updated via updateAgentVisibility() not this function
+export async function updateAgent(
+  agentId: string,
+  updates: { instruction?: string; name?: string; description?: string }
+): Promise<GetAgentResponse> {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(updates),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to update Agent: ${JSON.stringify(error)}`);
+  }
+
+  return response.json();
+}
+
+// Update agent deployment visibility (public/private)
+// Uses the dedicated deployment_visibility endpoint
+export async function updateAgentVisibility(
+  agentId: string,
+  visibility: 'VISIBILITY_PUBLIC' | 'VISIBILITY_PRIVATE'
+): Promise<GetAgentResponse> {
+  const response = await fetch(
+    `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/deployment_visibility`,
+    {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify({ visibility }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to update Agent visibility: ${JSON.stringify(error)}`);
+  }
+
+  return response.json();
+}
+
+// Delete agent and all its associated KBs
+export async function deleteAgentWithKBs(agentId: string): Promise<void> {
+  const agentResponse = await getAgent(agentId);
+  const kbIds = agentResponse.agent.knowledge_base_ids || [];
+
+  // Delete agent first
+  await deleteAgent(agentId);
+
+  // Then delete all associated KBs
+  for (const kbId of kbIds) {
+    try {
+      await deleteKnowledgeBase(kbId);
+    } catch (error) {
+      console.error(`Failed to delete KB ${kbId}:`, error);
+    }
+  }
+}
+
 // ============================================
-// Access Key Functions
+// API Key Functions
 // ============================================
 
+// Create API key for agent endpoint authentication
+// Note: Uses /api_keys endpoint, not /access_keys
 export async function createAccessKey(
   agentId: string
 ): Promise<CreateAccessKeyResponse> {
   const response = await fetch(
-    `${DO_API_BASE}/gen-ai/agents/${agentId}/access_keys`,
+    `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/api_keys`,
     {
       method: 'POST',
       headers: getHeaders(),
@@ -428,7 +552,7 @@ export async function createAccessKey(
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(`Failed to create Access Key: ${JSON.stringify(error)}`);
+    throw new Error(`Failed to create API Key: ${JSON.stringify(error)}`);
   }
 
   return response.json();
@@ -506,6 +630,30 @@ export function generateCrawlKBName(url: string): string {
     .replace(/[^a-z0-9]/gi, '-')
     .toLowerCase();
   return `${domain}-crawl`;
+}
+
+// Generate KB name for uploaded documents: "domain-com-uploads"
+export function generateUploadsKBName(url: string): string {
+  const domain = extractDomain(url)
+    .replace(/[^a-z0-9]/gi, '-')
+    .toLowerCase();
+  return `${domain}-uploads`;
+}
+
+// Generate KB name for structured data: "domain-com-structured"
+export function generateStructuredKBName(url: string): string {
+  const domain = extractDomain(url)
+    .replace(/[^a-z0-9]/gi, '-')
+    .toLowerCase();
+  return `${domain}-structured`;
+}
+
+// Get KB type from name
+export function getKBTypeFromName(name: string): 'crawl' | 'uploads' | 'structured' | 'unknown' {
+  if (name.endsWith('-crawl')) return 'crawl';
+  if (name.endsWith('-uploads')) return 'uploads';
+  if (name.endsWith('-structured')) return 'structured';
+  return 'unknown';
 }
 
 export async function findKBByDomain(

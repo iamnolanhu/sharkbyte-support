@@ -60,7 +60,12 @@ export default function Home() {
           localStorage.setItem(
             `sharkbyte-agent-${agentData.agentId}`,
             JSON.stringify({
-              ...agentData,
+              id: agentData.agentId,
+              name: agentData.agentName,
+              kbId: agentData.kbId,
+              url: agentData.url,
+              endpoint: agentData.endpoint,
+              accessKey: agentData.accessKey,
               createdAt: new Date().toISOString(),
             })
           );
@@ -108,25 +113,31 @@ export default function Home() {
 
       setAgentData(newAgentData);
 
-      // API now waits for indexing to complete, so agent is ready immediately
-      setStep('ready');
+      // Check if agent is already ready (existing agent) or needs indexing
+      if (data.status === 'ready' || data.isExisting) {
+        // Existing agent - ready immediately
+        setStep('ready');
 
-      // Store in localStorage with agent name
-      localStorage.setItem(
-        `sharkbyte-agent-${data.agentId}`,
-        JSON.stringify({
-          id: data.agentId,
-          name: data.agentName,
-          kbId: data.kbId,
-          url: data.url,
-          endpoint: data.endpoint,
-          accessKey: data.accessKey,
-          createdAt: new Date().toISOString(),
-        })
-      );
+        // Store in localStorage with agent name
+        localStorage.setItem(
+          `sharkbyte-agent-${data.agentId}`,
+          JSON.stringify({
+            id: data.agentId,
+            name: data.agentName,
+            kbId: data.kbId,
+            url: data.url,
+            endpoint: data.endpoint,
+            accessKey: data.accessKey,
+            createdAt: new Date().toISOString(),
+          })
+        );
 
-      // Redirect to chat
-      router.push(`/chat/${data.agentId}`);
+        // Redirect to chat
+        router.push(`/chat/${data.agentId}`);
+      } else {
+        // New agent - indexing in progress, start polling
+        setStep('indexing');
+      }
     } catch (err) {
       setStep('error');
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
@@ -188,7 +199,7 @@ export default function Home() {
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
             >
-              <SammyAvatar size="hero" className="mx-auto mb-2 sm:mb-4 w-24 h-24 sm:w-32 sm:h-32 md:w-40 md:h-40 lg:w-48 lg:h-48" />
+              <SammyAvatar size="hero" interactive className="mx-auto mb-2 sm:mb-4 w-24 h-24 sm:w-32 sm:h-32 md:w-40 md:h-40 lg:w-48 lg:h-48" />
               <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold bg-gradient-to-r from-[var(--do-blue)] to-[var(--do-teal)] bg-clip-text text-transparent leading-tight">
                 SharkByte Support
               </h1>

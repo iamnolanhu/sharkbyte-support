@@ -1,33 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
-import { History, Globe, Trash2, Plus, ChevronDown } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { History, Globe, Plus, ChevronDown, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
-import type { StoredAgent } from '@/types';
-
-function getStoredAgents(): StoredAgent[] {
-  if (typeof window === 'undefined') return [];
-
-  const agents: StoredAgent[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key?.startsWith('sharkbyte-agent-')) {
-      const data = localStorage.getItem(key);
-      if (data) {
-        try {
-          agents.push(JSON.parse(data));
-        } catch {
-          // Skip invalid entries
-        }
-      }
-    }
-  }
-  return agents.sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
-}
+import type { AgentWithKBs } from '@/types';
 
 function formatTimeAgo(dateString: string): string {
   const date = new Date(dateString);
@@ -44,25 +22,34 @@ function formatTimeAgo(dateString: string): string {
   return date.toLocaleDateString();
 }
 
-function extractDomain(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
-}
-
 export function AgentHistory() {
   const router = useRouter();
-  const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
-  const [agents, setAgents] = useState<StoredAgent[]>([]);
+  const [agents, setAgents] = useState<AgentWithKBs[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasFetched, setHasFetched] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Load agents on mount and when dropdown opens
+  // Fetch agents from API when dropdown opens
   useEffect(() => {
-    setAgents(getStoredAgents());
-  }, [isOpen]);
+    if (isOpen && !hasFetched) {
+      setIsLoading(true);
+      fetch('/api/agents')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success) {
+            setAgents(data.agents);
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to fetch agents:', err);
+        })
+        .finally(() => {
+          setIsLoading(false);
+          setHasFetched(true);
+        });
+    }
+  }, [isOpen, hasFetched]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -80,18 +67,8 @@ export function AgentHistory() {
 
   const handleNavigate = (agentId: string) => {
     setIsOpen(false);
-    router.push(`/chat/${agentId}`);
-  };
-
-  const handleDelete = (e: React.MouseEvent, agentId: string) => {
-    e.stopPropagation();
-    localStorage.removeItem(`sharkbyte-agent-${agentId}`);
-    setAgents(getStoredAgents());
-
-    // If we're on this agent's chat page, redirect to home
-    if (pathname === `/chat/${agentId}`) {
-      router.push('/');
-    }
+    // Navigate to management page
+    router.push(`/agents/${agentId}`);
   };
 
   const handleCreateNew = () => {
@@ -109,7 +86,7 @@ export function AgentHistory() {
       >
         <History className="w-4 h-4" />
         <span className="hidden sm:inline">History</span>
-        {agents.length > 0 && (
+        {hasFetched && agents.length > 0 && (
           <span className="bg-primary/20 text-primary text-xs px-1.5 py-0.5 rounded-full">
             {agents.length}
           </span>
@@ -133,39 +110,75 @@ export function AgentHistory() {
             </div>
 
             <div className="max-h-64 overflow-y-auto">
-              {agents.length === 0 ? (
+              {isLoading ? (
+                <div className="p-4 text-center text-muted-foreground text-sm">
+                  <Loader2 className="w-6 h-6 mx-auto mb-2 animate-spin" />
+                  <p>Loading chatbots...</p>
+                </div>
+              ) : agents.length === 0 ? (
                 <div className="p-4 text-center text-muted-foreground text-sm">
                   <History className="w-8 h-8 mx-auto mb-2 opacity-50" />
                   <p>No chatbots yet</p>
                   <p className="text-xs mt-1">Create one to get started!</p>
                 </div>
               ) : (
-                agents.map((agent) => (
-                  <div
-                    key={agent.id}
-                    onClick={() => handleNavigate(agent.id)}
-                    className="flex items-center gap-3 p-3 hover:bg-muted/50 cursor-pointer transition-colors group"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                      <Globe className="w-4 h-4 text-primary" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">
-                        {extractDomain(agent.url)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatTimeAgo(agent.createdAt)}
-                      </p>
-                    </div>
-                    <button
-                      onClick={(e) => handleDelete(e, agent.id)}
-                      className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-destructive/10 rounded-md transition-all"
-                      title="Delete chatbot"
+                agents.map((agent) => {
+                  const isReady = agent.status === 'active';
+                  const statusLabel =
+                    agent.status === 'active'
+                      ? 'Ready'
+                      : agent.status === 'creating'
+                      ? 'Creating...'
+                      : agent.status === 'error'
+                      ? 'Error'
+                      : agent.status;
+
+                  // Count total documents across all KBs
+                  const totalDocs = agent.knowledgeBases.reduce(
+                    (sum, kb) => sum + (kb.documentCount || 0),
+                    0
+                  );
+
+                  return (
+                    <div
+                      key={agent.uuid}
+                      onClick={() => handleNavigate(agent.uuid)}
+                      className="flex items-center gap-3 p-3 transition-colors group hover:bg-muted/50 cursor-pointer"
                     >
-                      <Trash2 className="w-4 h-4 text-destructive" />
-                    </button>
-                  </div>
-                ))
+                      <div
+                        className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          isReady ? 'bg-primary/10' : 'bg-muted'
+                        }`}
+                      >
+                        <Globe
+                          className={`w-4 h-4 ${
+                            isReady ? 'text-primary' : 'text-muted-foreground'
+                          }`}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm truncate">
+                          {agent.domain}
+                        </p>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                          {formatTimeAgo(agent.createdAt)}
+                          {!isReady && (
+                            <span className="text-yellow-500">
+                              {' '}
+                              • {statusLabel}
+                            </span>
+                          )}
+                          {isReady && totalDocs > 0 && (
+                            <span className="text-muted-foreground">
+                              {' '}
+                              • {totalDocs} docs
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
 

@@ -14,7 +14,7 @@ export function Header() {
           href="/"
           className="flex items-center gap-2 hover:opacity-80 transition-opacity"
         >
-          <SammyAvatar size="sm" className="w-8 h-8" />
+          <SammyAvatar size="sm" animated={false} className="w-8 h-8" />
           <span className="font-bold text-lg bg-gradient-to-r from-[var(--do-blue)] to-[var(--do-teal)] bg-clip-text text-transparent">
             SharkByte
           </span>

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -8,6 +9,7 @@ interface SammyAvatarProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | 'hero';
   variant?: 'normal' | 'front' | 'jetpack' | 'balloon';
   animated?: boolean;
+  interactive?: boolean;
   className?: string;
 }
 
@@ -32,14 +34,23 @@ export function SammyAvatar({
   size = 'md',
   variant = 'normal',
   animated = true,
+  interactive = false,
   className,
 }: SammyAvatarProps) {
+  const [isJumping, setIsJumping] = useState(false);
   const { container, pixels } = sizes[size];
   const imageSrc = variants[variant];
+
+  const handleClick = () => {
+    if (!interactive || isJumping) return;
+    setIsJumping(true);
+    setTimeout(() => setIsJumping(false), 600);
+  };
 
   const containerClass = cn(
     container,
     'relative flex items-center justify-center',
+    interactive && 'cursor-pointer select-none',
     className
   );
 
@@ -58,23 +69,43 @@ export function SammyAvatar({
     return (
       <motion.div
         className={containerClass}
-        animate={{
-          y: [0, -12, 0],
-          rotate: [0, 3, -3, 0],
-          scale: [1, 1.02, 1],
-        }}
-        transition={{
-          duration: 2.5,
-          repeat: Infinity,
-          ease: 'easeInOut' as const,
-        }}
+        onClick={handleClick}
+        animate={
+          isJumping
+            ? {
+                y: [0, -80, 0],
+                rotate: [0, 360],
+                scale: [1, 1.2, 1],
+              }
+            : {
+                y: [0, -12, 0],
+                rotate: [0, 3, -3, 0],
+                scale: [1, 1.02, 1],
+              }
+        }
+        transition={
+          isJumping
+            ? {
+                duration: 0.6,
+                ease: 'easeOut',
+              }
+            : {
+                duration: 2.5,
+                repeat: Infinity,
+                ease: 'easeInOut' as const,
+              }
+        }
       >
         {imageElement}
       </motion.div>
     );
   }
 
-  return <div className={containerClass}>{imageElement}</div>;
+  return (
+    <div className={containerClass} onClick={handleClick}>
+      {imageElement}
+    </div>
+  );
 }
 
 export function SammyLoading({ className }: { className?: string }) {

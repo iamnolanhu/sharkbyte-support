@@ -60,6 +60,10 @@ export interface Agent {
   region: string;
   knowledge_base_ids: string[];
   endpoint?: string;
+  deployment?: {
+    url?: string;
+    visibility?: string;
+  };
   instruction?: string;
   created_at: string;
 }
@@ -73,18 +77,28 @@ export interface GetAgentResponse {
 }
 
 // ============================================
-// Access Key Types
+// API Key Types
 // ============================================
 
+export interface ApiKeyInfo {
+  uuid?: string;
+  name?: string;
+  secret_key: string;    // The actual API key - only returned once on creation
+  created_by?: string;
+  created_at?: string;
+}
+
 export interface AccessKey {
-  id: string;
-  name: string;
-  key: string;
-  created_at: string;
+  id?: string;
+  name?: string;
+  key?: string;          // Legacy format
+  api_key?: string;      // Legacy format
+  created_at?: string;
 }
 
 export interface CreateAccessKeyResponse {
-  access_key: AccessKey;
+  api_key_info?: ApiKeyInfo;  // New format from /api_keys endpoint
+  access_key?: AccessKey;      // Legacy format
 }
 
 // ============================================
@@ -125,7 +139,7 @@ export interface ChatCompletionResponse {
 // ============================================
 
 // Knowledge base type classification
-export type KBType = 'crawl' | 'uploads' | 'faq' | 'custom';
+export type KBType = 'crawl' | 'uploads' | 'structured' | 'custom';
 
 // Extended KB info with type for multi-KB management
 export interface KnowledgeBaseInfo {
@@ -162,7 +176,8 @@ export interface CreateAgentApiResponse {
   success: boolean;
   agentId: string;
   agentName: string;
-  kbId: string;
+  kbId: string; // Primary crawl KB ID (for backward compatibility)
+  kbIds?: string[]; // All 3 KB IDs [crawl, uploads, structured]
   endpoint: string;
   accessKey: string;
   isExisting: boolean;

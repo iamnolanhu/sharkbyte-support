@@ -14,7 +14,18 @@ export function Footer() {
           Nolan
         </Link>
       </p>
-      <p>Powered by DigitalOcean Gradient AI</p>
+      <p>
+        Powered by{' '}
+        <Link
+          href="https://www.digitalocean.com/?refcode=732d9583cca9"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-primary transition-colors underline-offset-2 hover:underline"
+        >
+          DigitalOcean
+        </Link>{' '}
+        Gradient AI
+      </p>
     </footer>
   );
 }

@@ -47,3 +47,5 @@ next-env.d.ts
 # AI Documentation
 .claude/
 .serena/
+.env.backup
+.env.backup_v2

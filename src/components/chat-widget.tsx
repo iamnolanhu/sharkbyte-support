@@ -3,7 +3,28 @@
 import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Send, Loader2, Maximize2, Minimize2 } from 'lucide-react';
+import { X, Send, Loader2, Maximize2, Minimize2, Sun, Moon, Waves } from 'lucide-react';
+import { useTheme } from 'next-themes';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
+// Mini fish SVG for ocean theme
+function FishSvg({ size, opacity, direction }: { size: number; opacity: number; direction: 'left' | 'right' }) {
+  return (
+    <svg
+      width={size}
+      height={size * 0.6}
+      viewBox="0 0 24 14"
+      style={{ transform: direction === 'right' ? 'scaleX(-1)' : 'none' }}
+    >
+      <path
+        d="M23 7c-3-4-6-6-11-6C7 1 4 4 1 7c3 3 6 6 11 6 5 0 8-2 11-6z"
+        fill={`rgba(0, 175, 206, ${opacity})`}
+      />
+      <circle cx="6" cy="7" r="1.5" fill={`rgba(255, 255, 255, ${opacity * 0.8})`} />
+    </svg>
+  );
+}
 
 interface Message {
   role: 'user' | 'assistant';
@@ -35,10 +56,18 @@ export function ChatWidget({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  const [mounted, setMounted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  const { theme, setTheme } = useTheme();
+
   const defaultWelcome = welcomeMessage || `Hi! I'm ${agentName}. How can I help you today?`;
+
+  // Prevent hydration mismatch
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -51,6 +80,12 @@ export function ChatWidget({
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [isOpen]);
+
+  const cycleTheme = () => {
+    if (theme === 'light') setTheme('dark');
+    else if (theme === 'dark') setTheme('ocean');
+    else setTheme('light');
+  };
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
@@ -132,6 +167,29 @@ export function ChatWidget({
     ? 'fixed inset-4 sm:inset-6 w-auto h-auto'
     : 'w-[340px] sm:w-[380px] h-[500px]';
 
+  // Theme-aware colors
+  const isOcean = mounted && theme === 'ocean';
+  const isDark = mounted && (theme === 'dark' || theme === 'ocean');
+
+  const themeColors = {
+    bg: isOcean ? 'bg-[#0a1628]' : isDark ? 'bg-gray-900' : 'bg-white',
+    bgSecondary: isOcean ? 'bg-[#1e3a5f]' : isDark ? 'bg-gray-800' : 'bg-gray-50',
+    bgBubble: isOcean ? 'bg-[#1e3a5f]' : isDark ? 'bg-gray-700' : 'bg-white',
+    text: isOcean ? 'text-cyan-50' : isDark ? 'text-gray-200' : 'text-gray-800',
+    textMuted: isOcean ? 'text-cyan-200/60' : isDark ? 'text-gray-400' : 'text-gray-400',
+    border: isOcean ? 'border-cyan-500/20' : isDark ? 'border-gray-700' : 'border-gray-200',
+    inputBg: isOcean ? 'bg-[#0a1628]' : isDark ? 'bg-gray-800' : 'bg-gray-50',
+    inputBorder: isOcean ? 'border-cyan-500/30' : isDark ? 'border-gray-600' : 'border-gray-200',
+    accent: isOcean ? '#0891b2' : primaryColor,
+  };
+
+  const ThemeIcon = () => {
+    if (!mounted) return <Sun className="w-4 h-4 text-white" />;
+    if (theme === 'light') return <Sun className="w-4 h-4 text-white" />;
+    if (theme === 'dark') return <Moon className="w-4 h-4 text-white" />;
+    return <Waves className="w-4 h-4 text-white" />;
+  };
+
   return (
     <div className={`fixed ${isMaximized ? 'inset-0' : `bottom-4 sm:bottom-6 ${positionClasses}`} z-50`}>
       <AnimatePresence mode="wait">
@@ -143,15 +201,16 @@ export function ChatWidget({
             exit={{ opacity: 0, scale: 0.8, y: 20 }}
             transition={{ type: 'spring', damping: 25, stiffness: 300 }}
             layout
-            className={`${maximizedClasses} bg-white dark:bg-gray-900 rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-gray-200 dark:border-gray-700`}
+            className={`${maximizedClasses} ${themeColors.bg} rounded-2xl shadow-2xl flex flex-col overflow-hidden ${themeColors.border} border`}
             style={{
               boxShadow: `0 10px 40px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.05)`,
+              ...(isOcean ? { background: 'linear-gradient(180deg, #0a1628 0%, #1a365d 100%)' } : {}),
             }}
           >
             {/* Header */}
             <div
-              className="px-4 py-3 flex items-center gap-3 border-b border-gray-200 dark:border-gray-700"
-              style={{ backgroundColor: primaryColor }}
+              className={`px-4 py-3 flex items-center gap-3 ${themeColors.border} border-b`}
+              style={{ backgroundColor: themeColors.accent }}
             >
               <div className="w-10 h-10 rounded-full bg-white/20 p-1 flex-shrink-0">
                 <Image
@@ -167,6 +226,13 @@ export function ChatWidget({
                 <p className="text-xs text-white/80">Online</p>
               </div>
               <div className="flex items-center gap-1">
+                <button
+                  onClick={cycleTheme}
+                  className="p-2 rounded-full hover:bg-white/20 transition-colors"
+                  aria-label="Toggle theme"
+                >
+                  <ThemeIcon />
+                </button>
                 <button
                   onClick={() => setIsMaximized(!isMaximized)}
                   className="p-2 rounded-full hover:bg-white/20 transition-colors"
@@ -192,11 +258,59 @@ export function ChatWidget({
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50 dark:bg-gray-800">
+            <div className={`flex-1 overflow-y-auto p-4 space-y-4 ${themeColors.bgSecondary} relative`}>
+              {/* Ocean theme decorations - subtle bubbles and fish */}
+              {isOcean && (
+                <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                  {/* Mini bubbles */}
+                  {[...Array(6)].map((_, i) => (
+                    <motion.div
+                      key={`bubble-${i}`}
+                      className="absolute rounded-full"
+                      style={{
+                        width: 4 + (i % 3) * 2,
+                        height: 4 + (i % 3) * 2,
+                        left: `${15 + i * 15}%`,
+                        bottom: '-5%',
+                        background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2), rgba(0,175,206,0.1))`,
+                      }}
+                      animate={{
+                        y: [0, -400],
+                        opacity: [0, 0.15, 0.15, 0],
+                      }}
+                      transition={{
+                        duration: 8 + i * 2,
+                        repeat: Infinity,
+                        delay: i * 1.5,
+                        ease: 'easeOut',
+                      }}
+                    />
+                  ))}
+                  {/* Mini fish */}
+                  {[0, 1].map((i) => (
+                    <motion.div
+                      key={`fish-${i}`}
+                      className="absolute"
+                      style={{ top: `${30 + i * 30}%` }}
+                      initial={{ x: i === 0 ? '-20px' : '100%' }}
+                      animate={{ x: i === 0 ? '100%' : '-20px' }}
+                      transition={{
+                        duration: 15 + i * 5,
+                        repeat: Infinity,
+                        delay: i * 8,
+                        ease: 'linear',
+                      }}
+                    >
+                      <FishSvg size={12} opacity={0.1} direction={i === 0 ? 'right' : 'left'} />
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+
               {/* Welcome message */}
               {messages.length === 0 && !streamingContent && (
                 <div className="flex gap-3">
-                  <div className="w-8 h-8 rounded-full bg-white dark:bg-gray-700 p-1 flex-shrink-0 shadow-sm">
+                  <div className={`w-8 h-8 rounded-full ${themeColors.bgBubble} p-1 flex-shrink-0 shadow-sm`}>
                     <Image
                       src={avatarUrl}
                       alt={agentName}
@@ -205,8 +319,8 @@ export function ChatWidget({
                       className="w-full h-full object-contain"
                     />
                   </div>
-                  <div className="bg-white dark:bg-gray-700 rounded-2xl rounded-tl-sm px-4 py-2 max-w-[80%] shadow-sm">
-                    <p className="text-sm text-gray-800 dark:text-gray-200">{defaultWelcome}</p>
+                  <div className={`${themeColors.bgBubble} rounded-2xl rounded-tl-sm px-4 py-2 max-w-[80%] shadow-sm`}>
+                    <p className={`text-sm ${themeColors.text}`}>{defaultWelcome}</p>
                   </div>
                 </div>
               )}
@@ -218,7 +332,7 @@ export function ChatWidget({
                   className={`flex gap-3 ${message.role === 'user' ? 'flex-row-reverse' : ''}`}
                 >
                   {message.role === 'assistant' && (
-                    <div className="w-8 h-8 rounded-full bg-white dark:bg-gray-700 p-1 flex-shrink-0 shadow-sm">
+                    <div className={`w-8 h-8 rounded-full ${themeColors.bgBubble} p-1 flex-shrink-0 shadow-sm`}>
                       <Image
                         src={avatarUrl}
                         alt={agentName}
@@ -231,12 +345,53 @@ export function ChatWidget({
                   <div
                     className={`rounded-2xl px-4 py-2 max-w-[80%] shadow-sm ${
                       message.role === 'user'
-                        ? 'bg-blue-500 text-white rounded-tr-sm'
-                        : 'bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-tl-sm'
+                        ? 'text-white rounded-tr-sm'
+                        : `${themeColors.bgBubble} ${themeColors.text} rounded-tl-sm`
                     }`}
-                    style={message.role === 'user' ? { backgroundColor: primaryColor } : {}}
+                    style={message.role === 'user' ? { backgroundColor: themeColors.accent } : {}}
                   >
-                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    {message.role === 'user' ? (
+                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    ) : (
+                      <div className="text-sm chat-markdown">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                            ul: ({ children }) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
+                            ol: ({ children }) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
+                            li: ({ children }) => <li className="mb-1">{children}</li>,
+                            code: ({ children }) => (
+                              <code className={`${isOcean ? 'bg-cyan-900/50' : isDark ? 'bg-gray-600' : 'bg-gray-200'} px-1 py-0.5 rounded text-xs`}>
+                                {children}
+                              </code>
+                            ),
+                            pre: ({ children }) => (
+                              <pre className={`${isOcean ? 'bg-cyan-900/50' : isDark ? 'bg-gray-600' : 'bg-gray-200'} p-2 rounded overflow-x-auto text-xs my-2`}>
+                                {children}
+                              </pre>
+                            ),
+                            strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                            em: ({ children }) => <em className="italic">{children}</em>,
+                            a: ({ href, children }) => (
+                              <a href={href} target="_blank" rel="noopener noreferrer" className={`${isOcean ? 'text-cyan-300' : 'text-blue-500'} hover:underline`}>
+                                {children}
+                              </a>
+                            ),
+                            h1: ({ children }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
+                            h2: ({ children }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
+                            h3: ({ children }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
+                            blockquote: ({ children }) => (
+                              <blockquote className={`border-l-2 ${isOcean ? 'border-cyan-500' : 'border-gray-400'} pl-3 my-2 italic`}>
+                                {children}
+                              </blockquote>
+                            ),
+                          }}
+                        >
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -244,7 +399,7 @@ export function ChatWidget({
               {/* Streaming message */}
               {streamingContent && (
                 <div className="flex gap-3">
-                  <div className="w-8 h-8 rounded-full bg-white dark:bg-gray-700 p-1 flex-shrink-0 shadow-sm">
+                  <div className={`w-8 h-8 rounded-full ${themeColors.bgBubble} p-1 flex-shrink-0 shadow-sm`}>
                     <Image
                       src={avatarUrl}
                       alt={agentName}
@@ -253,11 +408,38 @@ export function ChatWidget({
                       className="w-full h-full object-contain"
                     />
                   </div>
-                  <div className="bg-white dark:bg-gray-700 rounded-2xl rounded-tl-sm px-4 py-2 max-w-[80%] shadow-sm">
-                    <p className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
-                      {streamingContent}
-                      <span className="inline-block w-1.5 h-4 bg-gray-400 dark:bg-gray-500 ml-0.5 animate-pulse" />
-                    </p>
+                  <div className={`${themeColors.bgBubble} rounded-2xl rounded-tl-sm px-4 py-2 max-w-[80%] shadow-sm`}>
+                    <div className={`text-sm ${themeColors.text} chat-markdown`}>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                          ul: ({ children }) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
+                          li: ({ children }) => <li className="mb-1">{children}</li>,
+                          code: ({ children }) => (
+                            <code className={`${isOcean ? 'bg-cyan-900/50' : isDark ? 'bg-gray-600' : 'bg-gray-200'} px-1 py-0.5 rounded text-xs`}>
+                              {children}
+                            </code>
+                          ),
+                          pre: ({ children }) => (
+                            <pre className={`${isOcean ? 'bg-cyan-900/50' : isDark ? 'bg-gray-600' : 'bg-gray-200'} p-2 rounded overflow-x-auto text-xs my-2`}>
+                              {children}
+                            </pre>
+                          ),
+                          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                          em: ({ children }) => <em className="italic">{children}</em>,
+                          a: ({ href, children }) => (
+                            <a href={href} target="_blank" rel="noopener noreferrer" className={`${isOcean ? 'text-cyan-300' : 'text-blue-500'} hover:underline`}>
+                              {children}
+                            </a>
+                          ),
+                        }}
+                      >
+                        {streamingContent}
+                      </ReactMarkdown>
+                      <span className={`inline-block w-1.5 h-4 ${isOcean ? 'bg-cyan-400' : 'bg-gray-400'} ml-0.5 animate-pulse`} />
+                    </div>
                   </div>
                 </div>
               )}
@@ -265,7 +447,7 @@ export function ChatWidget({
               {/* Loading indicator */}
               {isLoading && !streamingContent && (
                 <div className="flex gap-3">
-                  <div className="w-8 h-8 rounded-full bg-white dark:bg-gray-700 p-1 flex-shrink-0 shadow-sm">
+                  <div className={`w-8 h-8 rounded-full ${themeColors.bgBubble} p-1 flex-shrink-0 shadow-sm`}>
                     <Image
                       src={avatarUrl}
                       alt={agentName}
@@ -274,11 +456,11 @@ export function ChatWidget({
                       className="w-full h-full object-contain"
                     />
                   </div>
-                  <div className="bg-white dark:bg-gray-700 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
+                  <div className={`${themeColors.bgBubble} rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm`}>
                     <div className="flex gap-1">
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <span className={`w-2 h-2 ${isOcean ? 'bg-cyan-400' : 'bg-gray-400'} rounded-full animate-bounce`} style={{ animationDelay: '0ms' }} />
+                      <span className={`w-2 h-2 ${isOcean ? 'bg-cyan-400' : 'bg-gray-400'} rounded-full animate-bounce`} style={{ animationDelay: '150ms' }} />
+                      <span className={`w-2 h-2 ${isOcean ? 'bg-cyan-400' : 'bg-gray-400'} rounded-full animate-bounce`} style={{ animationDelay: '300ms' }} />
                     </div>
                   </div>
                 </div>
@@ -288,7 +470,7 @@ export function ChatWidget({
             </div>
 
             {/* Input */}
-            <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+            <div className={`p-3 ${themeColors.border} border-t ${themeColors.bg}`}>
               <div className="flex items-end gap-2">
                 <textarea
                   ref={inputRef}
@@ -297,7 +479,7 @@ export function ChatWidget({
                   onKeyDown={handleKeyDown}
                   placeholder="Type a message..."
                   rows={1}
-                  className="flex-1 resize-none rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white placeholder:text-gray-400"
+                  className={`flex-1 resize-none rounded-xl border ${themeColors.inputBorder} ${themeColors.inputBg} px-4 py-2.5 text-sm focus:outline-none focus:ring-2 ${isOcean ? 'focus:ring-cyan-500 text-cyan-50 placeholder:text-cyan-200/40' : 'focus:ring-blue-500 text-inherit placeholder:text-gray-400'}`}
                   style={{ maxHeight: '100px' }}
                   disabled={isLoading}
                 />
@@ -305,7 +487,7 @@ export function ChatWidget({
                   onClick={sendMessage}
                   disabled={!input.trim() || isLoading}
                   className="p-2.5 rounded-xl text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90"
-                  style={{ backgroundColor: primaryColor }}
+                  style={{ backgroundColor: themeColors.accent }}
                   aria-label="Send message"
                 >
                   {isLoading ? (
@@ -315,13 +497,13 @@ export function ChatWidget({
                   )}
                 </button>
               </div>
-              <p className="text-[10px] text-gray-400 text-center mt-2">
+              <p className={`text-[10px] ${themeColors.textMuted} text-center mt-2`}>
                 Powered by{' '}
                 <a
                   href="https://sharkbyte-support.vercel.app"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                  className={`hover:opacity-80 transition-colors`}
                 >
                   SharkByte
                 </a>
@@ -331,7 +513,7 @@ export function ChatWidget({
                   href="https://dev.nolanhu.com"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                  className={`hover:opacity-80 transition-colors`}
                 >
                   Nolan
                 </a>
@@ -349,7 +531,7 @@ export function ChatWidget({
             onClick={() => setIsOpen(true)}
             className="w-14 h-14 sm:w-16 sm:h-16 rounded-full shadow-lg hover:shadow-xl transition-shadow overflow-hidden"
             style={{
-              boxShadow: `0 4px 20px rgba(0,0,0,0.15), 0 0 0 3px ${primaryColor}40`,
+              boxShadow: `0 4px 20px rgba(0,0,0,0.15), 0 0 0 3px ${themeColors.accent}40`,
             }}
             aria-label={`Chat with ${agentName}`}
           >

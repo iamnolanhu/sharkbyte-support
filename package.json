@@ -6,7 +6,9 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "cleanup": "npx tsx scripts/cleanup-do.ts",
+    "create-agent": "npx tsx scripts/create-first-agent.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.86",
@@ -22,6 +24,8 @@
     "openai": "^4.77.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^2.6.0",
     "uuid": "^11.0.3"
   },
@@ -31,9 +35,11 @@
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@types/uuid": "^10.0.0",
+    "dotenv": "^17.2.3",
     "eslint": "^9.17.0",
     "eslint-config-next": "16.0.10",
     "tailwindcss": "^4.1.18",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.2"
   }
 }

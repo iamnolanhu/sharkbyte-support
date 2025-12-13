@@ -6,7 +6,6 @@ import {
   getAgent,
   startIndexingJob,
   waitForDatabaseReady,
-  waitForIndexing,
   normalizeUrl,
   extractDomain,
   generateAgentName,
@@ -43,16 +42,20 @@ export async function POST(request: NextRequest) {
       const agentDetails = await getAgent(existingAgent.uuid);
       const agent = agentDetails.agent;
 
-      // Create a new access key for this session
-      const accessKeyResponse = await createAccessKey(agent.uuid);
+      // Create a new API key for this session
+      const keyResponse = await createAccessKey(agent.uuid);
+      const accessKey = keyResponse.api_key_info?.secret_key ||
+                       keyResponse.access_key?.key ||
+                       keyResponse.access_key?.api_key || '';
 
       const response: CreateAgentApiResponse = {
         success: true,
         agentId: agent.uuid,
         agentName: agent.name,
         kbId: agent.knowledge_base_ids[0] || '',
+        kbIds: agent.knowledge_base_ids || [],
         endpoint: agent.endpoint || '',
-        accessKey: accessKeyResponse.access_key.key,
+        accessKey,
         isExisting: true,
         status: 'ready',
         message: `Found existing agent: ${agent.name}`,
@@ -64,58 +67,64 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Step 2: Create new Knowledge Base for crawled data
-    const kbName = generateCrawlKBName(normalizedUrl);
-    console.log(`Creating new Knowledge Base: ${kbName}...`);
+    // Step 2: Create 3 Knowledge Bases
+    console.log(`Creating Knowledge Bases for ${domain}...`);
 
-    const kbResponse = await createKnowledgeBaseSmartCrawl({
-      name: kbName,
+    // 2a: Create crawl KB (with web crawler)
+    const crawlKBName = generateCrawlKBName(normalizedUrl);
+    console.log(`  Creating crawl KB: ${crawlKBName}...`);
+    const crawlKBResponse = await createKnowledgeBaseSmartCrawl({
+      name: crawlKBName,
       seedUrls: [normalizedUrl],
     });
-    const kbId = kbResponse.knowledge_base.uuid;
-    console.log(`Knowledge Base created: ${kbId}`);
+    const crawlKBId = crawlKBResponse.knowledge_base.uuid;
+    console.log(`  Crawl KB created: ${crawlKBId}`);
 
-    // Step 3: Wait for database to be provisioned
-    console.log(`Waiting for database to be ready...`);
-    await waitForDatabaseReady(kbId, 120000, 5000);
+    // Wait for database to be provisioned
+    console.log(`  Waiting for database to be ready...`);
+    await waitForDatabaseReady(crawlKBId, 120000, 5000);
 
-    // Step 4: Start indexing job
-    console.log(`Starting indexing job...`);
-    await startIndexingJob(kbId);
+    // Note: uploads/structured KBs will be created later when users upload files
+    const allKBIds = [crawlKBId];
 
-    // Step 5: Wait for indexing to complete
-    console.log(`Waiting for indexing to complete...`);
-    await waitForIndexing(kbId, 180000, 3000); // 3 min timeout for indexing
-    console.log(`Indexing completed`);
-
-    // Step 6: Create new agent with the KB
+    // Step 3: Create agent with crawl KB
     const agentName = generateAgentName(normalizedUrl);
     console.log(`Creating new agent: ${agentName}...`);
 
     const agentResponse = await createAgent({
       name: agentName,
-      knowledgeBaseIds: [kbId],
+      knowledgeBaseIds: allKBIds,
       instruction: getDefaultInstruction(domain),
       description: `Customer support agent for ${domain}`,
     });
     const agent = agentResponse.agent;
     console.log(`Agent created: ${agent.uuid}`);
 
-    // Step 7: Create access key for the new agent
-    console.log(`Creating access key...`);
-    const accessKeyResponse = await createAccessKey(agent.uuid);
-    console.log(`Access key created`);
+    // Step 4: Create API key for the agent
+    console.log(`Creating API key...`);
+    const apiKeyResponse = await createAccessKey(agent.uuid);
+    const apiKey = apiKeyResponse.api_key_info?.secret_key ||
+                  apiKeyResponse.access_key?.key ||
+                  apiKeyResponse.access_key?.api_key || '';
+    console.log(`API key created`);
 
+    // Step 5: Start indexing job on crawl KB
+    console.log(`Starting indexing job on crawl KB...`);
+    await startIndexingJob(crawlKBId);
+    console.log(`Indexing started - returning early for frontend polling`);
+
+    // Return with KB ID
     const response: CreateAgentApiResponse = {
       success: true,
       agentId: agent.uuid,
       agentName: agent.name,
-      kbId,
+      kbId: crawlKBId,
+      kbIds: allKBIds,
       endpoint: agent.endpoint || '',
-      accessKey: accessKeyResponse.access_key.key,
+      accessKey: apiKey,
       isExisting: false,
-      status: 'ready',
-      message: `Created new agent: ${agent.name}`,
+      status: 'indexing',
+      message: `Agent created, indexing website in progress`,
     };
 
     return NextResponse.json({
