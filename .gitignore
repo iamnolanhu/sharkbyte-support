@@ -44,5 +44,6 @@ Thumbs.db
 *.tsbuildinfo
 next-env.d.ts
 
-# AI Documentation (private)
+# AI Documentation
 .claude/
+.serena/

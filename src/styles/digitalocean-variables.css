@@ -1,0 +1,168 @@
+/**
+ * DigitalOcean Design System - CSS Custom Properties
+ * Scraped from digitalocean.com on December 2025
+ *
+ * Import this file to use DigitalOcean brand colors throughout your project
+ */
+
+:root {
+  /* ============================================
+     PRIMARY BRAND COLORS
+     ============================================ */
+  --do-blue: #0069FF;
+  --do-blue-hover: #1433D6;
+  --do-navy: #000C2A;
+  --do-blue-docs: #0080FF;
+
+  /* ============================================
+     SECONDARY COLORS
+     ============================================ */
+  --do-purple: #6414EE;
+  --do-magenta: #CA64DD;
+  --do-magenta-dark: #8917A6;
+  --do-teal: #00AFCE;
+  --do-teal-dark: #006375;
+  --do-green: #15CD72;
+  --do-green-alt: #00C483;
+  --do-green-dark: #006650;
+
+  /* ============================================
+     BACKGROUND COLORS
+     ============================================ */
+  --do-bg-light: #F9FAFE;
+  --do-bg-light-blue: #CAECFF;
+  --do-bg-light-blue-bright: #B5F6FF;
+  --do-bg-light-purple: #E8E2FC;
+  --do-bg-light-green: #B5FFDB;
+  --do-bg-light-teal: #B5FFF1;
+  --do-bg-neutral: #E3E8F4;
+  --do-bg-dark: #000C2A;
+  --do-bg-dark-gradient-start: #0a1628;
+  --do-bg-dark-gradient-end: #1a365d;
+
+  /* ============================================
+     TEXT COLORS
+     ============================================ */
+  --do-text-primary: #000C2A;
+  --do-text-secondary: #4D5B7C;
+  --do-text-muted: #8690A9;
+  --do-text-light: #FFFFFF;
+
+  /* ============================================
+     SEMANTIC COLORS
+     ============================================ */
+  --do-success: #15CD72;
+  --do-error: #FF6B6B;
+  --do-warning: #FFAA00;
+  --do-info: #0069FF;
+  --do-focus: #0069FF;
+
+  /* ============================================
+     BORDER COLORS
+     ============================================ */
+  --do-border-light: rgba(17, 25, 46, 0.1);
+  --do-border-medium: #E3E8F4;
+  --do-border-dark: #4D5B7C;
+
+  /* ============================================
+     TYPOGRAPHY
+     ============================================ */
+  --do-font-heading: 'Epilogue', sans-serif;
+  --do-font-body: 'Inter', sans-serif;
+  --do-font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Font Sizes */
+  --do-text-xs: 12px;
+  --do-text-sm: 14px;
+  --do-text-base: 16px;
+  --do-text-lg: 18px;
+  --do-text-xl: 20px;
+  --do-text-2xl: 24px;
+  --do-text-3xl: 28px;
+  --do-text-4xl: 36px;
+  --do-text-5xl: 48px;
+
+  /* ============================================
+     SPACING (8px base grid)
+     ============================================ */
+  --do-space-1: 8px;
+  --do-space-2: 16px;
+  --do-space-3: 24px;
+  --do-space-4: 32px;
+  --do-space-5: 40px;
+  --do-space-6: 48px;
+  --do-space-7: 56px;
+  --do-space-8: 64px;
+  --do-space-10: 80px;
+  --do-space-16: 128px;
+
+  /* ============================================
+     BORDER RADIUS
+     ============================================ */
+  --do-radius-sm: 4px;
+  --do-radius-md: 8px;
+  --do-radius-lg: 16px;
+  --do-radius-xl: 24px;
+  --do-radius-full: 999px;
+
+  /* ============================================
+     SHADOWS
+     ============================================ */
+  --do-shadow-sm: 0 1px 2px rgba(0, 12, 42, 0.05);
+  --do-shadow-md: 0 4px 6px rgba(0, 12, 42, 0.1);
+  --do-shadow-lg: 0 10px 15px rgba(0, 12, 42, 0.1);
+  --do-shadow-xl: 0 20px 25px rgba(0, 12, 42, 0.15);
+  --do-shadow-glow: 0 0 20px rgba(0, 105, 255, 0.3);
+
+  /* ============================================
+     TRANSITIONS
+     ============================================ */
+  --do-transition-fast: 150ms ease;
+  --do-transition-normal: 200ms ease;
+  --do-transition-slow: 300ms ease;
+  --do-transition-bounce: 300ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+  /* ============================================
+     GRADIENTS
+     ============================================ */
+  --do-gradient-ocean-deep: linear-gradient(180deg, #0a1628 0%, #1a365d 100%);
+  --do-gradient-ocean-wave: linear-gradient(135deg, #0069FF 0%, #00AFCE 100%);
+  --do-gradient-ocean-sunset: linear-gradient(135deg, #0069FF 0%, #6414EE 50%, #CA64DD 100%);
+  --do-gradient-success: linear-gradient(135deg, #15CD72 0%, #00C483 100%);
+  --do-gradient-primary-button: linear-gradient(180deg, #0069FF 0%, #1433D6 100%);
+  --do-gradient-secondary-button: linear-gradient(180deg, #6414EE 0%, #8917A6 100%);
+}
+
+/* ============================================
+   UTILITY CLASSES
+   ============================================ */
+
+/* Backgrounds */
+.bg-do-blue { background-color: var(--do-blue); }
+.bg-do-navy { background-color: var(--do-navy); }
+.bg-do-purple { background-color: var(--do-purple); }
+.bg-do-teal { background-color: var(--do-teal); }
+.bg-do-green { background-color: var(--do-green); }
+.bg-do-gradient-ocean { background: var(--do-gradient-ocean-deep); }
+.bg-do-gradient-wave { background: var(--do-gradient-ocean-wave); }
+
+/* Text Colors */
+.text-do-blue { color: var(--do-blue); }
+.text-do-navy { color: var(--do-navy); }
+.text-do-secondary { color: var(--do-text-secondary); }
+.text-do-muted { color: var(--do-text-muted); }
+
+/* Borders */
+.border-do-light { border-color: var(--do-border-light); }
+.border-do-blue { border-color: var(--do-blue); }
+
+/* Shadows */
+.shadow-do-sm { box-shadow: var(--do-shadow-sm); }
+.shadow-do-md { box-shadow: var(--do-shadow-md); }
+.shadow-do-lg { box-shadow: var(--do-shadow-lg); }
+.shadow-do-glow { box-shadow: var(--do-shadow-glow); }
+
+/* Fonts */
+.font-do-heading { font-family: var(--do-font-heading); }
+.font-do-body { font-family: var(--do-font-body); }
+.font-do-mono { font-family: var(--do-font-mono); }
