@@ -29,10 +29,11 @@ export function ThemeToggle() {
 
   return (
     <Button
-      variant="ghost"
+      variant="outline"
       size="icon"
       onClick={cycleTheme}
       title={`Current theme: ${theme}`}
+      className="bg-background/50 backdrop-blur-sm"
     >
       {theme === "light" && <Sun className="h-5 w-5" />}
       {theme === "dark" && <Moon className="h-5 w-5" />}

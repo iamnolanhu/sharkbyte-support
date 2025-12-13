@@ -1,7 +1,8 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { useMemo } from 'react';
+import { useState, useEffect } from 'react';
+import { useTheme } from 'next-themes';
 
 // Seeded random number generator for consistent values
 function seededRandom(seed: number) {
@@ -45,7 +46,51 @@ const sparkleConfigs = [
   { left: 70, top: 40 },
 ];
 
+// Pre-defined fish configurations (deterministic)
+const fishConfigs = [
+  { top: 20, size: 24, duration: 18, delay: 0, direction: 'right' as const, opacity: 0.25 },
+  { top: 40, size: 16, duration: 22, delay: 6, direction: 'left' as const, opacity: 0.2 },
+  { top: 60, size: 28, duration: 15, delay: 3, direction: 'right' as const, opacity: 0.15 },
+  { top: 30, size: 20, duration: 20, delay: 10, direction: 'left' as const, opacity: 0.25 },
+  { top: 50, size: 18, duration: 25, delay: 8, direction: 'right' as const, opacity: 0.2 },
+];
+
+// Simple fish SVG component
+function FishSvg({ size, opacity, direction }: { size: number; opacity: number; direction: 'left' | 'right' }) {
+  // Fish SVG faces left by default (eye at x=6, tail at x=23)
+  // Flip horizontally when swimming right
+  return (
+    <svg
+      width={size}
+      height={size * 0.6}
+      viewBox="0 0 24 14"
+      style={{ transform: direction === 'right' ? 'scaleX(-1)' : 'none' }}
+    >
+      <path
+        d="M23 7c-3-4-6-6-11-6C7 1 4 4 1 7c3 3 6 6 11 6 5 0 8-2 11-6z"
+        fill={`rgba(0, 175, 206, ${opacity})`}
+      />
+      <circle cx="6" cy="7" r="1.5" fill={`rgba(255, 255, 255, ${opacity * 0.8})`} />
+    </svg>
+  );
+}
+
 export function WaveBackground() {
+  const { theme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Only show ocean effects when theme is 'ocean'
+  const isOcean = mounted && theme === 'ocean';
+
+  // Return empty container for non-ocean themes (CSS handles background)
+  if (!isOcean) {
+    return <div className="fixed inset-0 -z-10" />;
+  }
+
   return (
     <div className="fixed inset-0 -z-10 overflow-hidden">
       {/* Ocean gradient base */}
@@ -211,6 +256,35 @@ export function WaveBackground() {
             ease: 'easeInOut',
           }}
         />
+      ))}
+
+      {/* Swimming fish */}
+      {fishConfigs.map((fish, i) => (
+        <motion.div
+          key={`fish-${i}`}
+          className="absolute pointer-events-none"
+          style={{ top: `${fish.top}%` }}
+          initial={{ x: fish.direction === 'right' ? '-10%' : '110vw' }}
+          animate={{
+            x: fish.direction === 'right' ? '110vw' : '-10%',
+            y: [0, -8, 0, 8, 0],
+          }}
+          transition={{
+            x: {
+              duration: fish.duration,
+              repeat: Infinity,
+              delay: fish.delay,
+              ease: 'linear' as const,
+            },
+            y: {
+              duration: 2,
+              repeat: Infinity,
+              ease: 'easeInOut' as const,
+            },
+          }}
+        >
+          <FishSvg size={fish.size} opacity={fish.opacity} direction={fish.direction} />
+        </motion.div>
       ))}
     </div>
   );
