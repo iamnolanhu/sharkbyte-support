@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { Analytics } from "@vercel/analytics/react";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { DemoChatWidget } from "@/components/demo-chat-widget";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -40,6 +41,7 @@ export default function RootLayout({
           themes={["light", "dark", "ocean"]}
         >
           {children}
+          <DemoChatWidget />
         </ThemeProvider>
         <Analytics />
       </body>

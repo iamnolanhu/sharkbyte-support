@@ -6,15 +6,33 @@
 // Knowledge Base Types
 // ============================================
 
+export interface IndexingJob {
+  uuid: string;
+  knowledge_base_uuid: string;
+  status: string;
+  phase: string;
+  tokens?: number;
+  total_tokens?: string;
+  total_datasources?: number;
+  completed_datasources?: number;
+  created_at: string;
+  updated_at: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
 export interface KnowledgeBase {
-  id: string;
+  uuid: string;
   name: string;
-  status: 'indexing' | 'indexed' | 'error';
-  embedding_model_id: string;
+  status?: 'indexing' | 'indexed' | 'error';
+  embedding_model_uuid: string;
+  project_id: string;
   region: string;
+  database_id?: string;
   document_count?: number;
   created_at: string;
   updated_at?: string;
+  last_indexing_job?: IndexingJob;
 }
 
 export interface CreateKBResponse {
@@ -25,15 +43,21 @@ export interface GetKBResponse {
   knowledge_base: KnowledgeBase;
 }
 
+export interface ListKBResponse {
+  knowledge_bases: KnowledgeBase[];
+}
+
 // ============================================
 // Agent Types
 // ============================================
 
 export interface Agent {
-  id: string;
+  uuid: string;
   name: string;
-  status: 'active' | 'creating' | 'error';
-  model_id: string;
+  status?: 'active' | 'creating' | 'error';
+  model_uuid: string;
+  project_id: string;
+  region: string;
   knowledge_base_ids: string[];
   endpoint?: string;
   instruction?: string;
@@ -97,6 +121,35 @@ export interface ChatCompletionResponse {
 }
 
 // ============================================
+// Multi-KB Types
+// ============================================
+
+// Knowledge base type classification
+export type KBType = 'crawl' | 'uploads' | 'faq' | 'custom';
+
+// Extended KB info with type for multi-KB management
+export interface KnowledgeBaseInfo {
+  uuid: string;
+  name: string;
+  type: KBType;
+  status: 'creating' | 'indexing' | 'indexed' | 'error';
+  documentCount?: number;
+  sourceUrl?: string; // For crawl type
+  createdAt: string;
+}
+
+// Agent with full KB context
+export interface AgentWithKBs {
+  uuid: string;
+  name: string;
+  domain: string;
+  endpoint: string;
+  status: 'creating' | 'active' | 'error';
+  knowledgeBases: KnowledgeBaseInfo[];
+  createdAt: string;
+}
+
+// ============================================
 // API Route Types
 // ============================================
 
@@ -108,9 +161,14 @@ export interface CreateAgentRequest {
 export interface CreateAgentApiResponse {
   success: boolean;
   agentId: string;
+  agentName: string;
   kbId: string;
+  endpoint: string;
+  accessKey: string;
+  isExisting: boolean;
   status: 'creating' | 'indexing' | 'ready' | 'error';
   message?: string;
+  error?: string;
 }
 
 export interface AgentStatusResponse {
@@ -128,6 +186,7 @@ export interface AgentStatusResponse {
 
 export interface StoredAgent {
   id: string;
+  name: string; // Agent display name (e.g., "Sammy - acme.com")
   kbId: string;
   url: string;
   endpoint: string;

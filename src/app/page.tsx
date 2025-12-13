@@ -3,33 +3,51 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ThemeToggle } from '@/components/theme-toggle';
+import { Header } from '@/components/header';
 import { UrlInput } from '@/components/url-input';
 import { ProgressIndicator } from '@/components/progress-indicator';
 import { WaveBackground } from '@/components/wave-background';
 import { SammyAvatar } from '@/components/sammy-avatar';
+import { Footer } from '@/components/footer';
 
 type CreationStep = 'idle' | 'creating' | 'indexing' | 'ready' | 'error';
 
 interface AgentData {
   agentId: string;
+  agentName: string;
   kbId: string;
   endpoint: string;
   accessKey: string;
   url: string;
+  isExisting: boolean;
 }
+
+const MAX_POLL_ATTEMPTS = 60; // 3 minutes max (60 × 3 seconds)
 
 export default function Home() {
   const router = useRouter();
   const [step, setStep] = useState<CreationStep>('idle');
   const [agentData, setAgentData] = useState<AgentData | null>(null);
   const [error, setError] = useState<string>('');
+  const [pollCount, setPollCount] = useState(0);
 
-  // Poll for agent status when indexing
+  // Poll for agent status when indexing (with timeout)
   useEffect(() => {
     if (step !== 'indexing' || !agentData) return;
 
     const pollStatus = async () => {
+      // Check for timeout
+      setPollCount((prev) => {
+        const newCount = prev + 1;
+        if (newCount >= MAX_POLL_ATTEMPTS) {
+          setStep('error');
+          setError(
+            'Indexing is taking longer than expected. The process will continue in the background - please try again in a few minutes.'
+          );
+        }
+        return newCount;
+      });
+
       try {
         const res = await fetch(
           `/api/agent-status?agentId=${agentData.agentId}&kbId=${agentData.kbId}`
@@ -63,6 +81,7 @@ export default function Home() {
   const handleSubmit = async (url: string) => {
     setStep('creating');
     setError('');
+    setPollCount(0);
 
     try {
       const res = await fetch('/api/create-agent', {
@@ -77,14 +96,37 @@ export default function Home() {
         throw new Error(data.error || 'Failed to create agent');
       }
 
-      setAgentData({
+      const newAgentData: AgentData = {
         agentId: data.agentId,
+        agentName: data.agentName,
         kbId: data.kbId,
         endpoint: data.endpoint,
         accessKey: data.accessKey,
         url: data.url,
-      });
-      setStep('indexing');
+        isExisting: data.isExisting,
+      };
+
+      setAgentData(newAgentData);
+
+      // API now waits for indexing to complete, so agent is ready immediately
+      setStep('ready');
+
+      // Store in localStorage with agent name
+      localStorage.setItem(
+        `sharkbyte-agent-${data.agentId}`,
+        JSON.stringify({
+          id: data.agentId,
+          name: data.agentName,
+          kbId: data.kbId,
+          url: data.url,
+          endpoint: data.endpoint,
+          accessKey: data.accessKey,
+          createdAt: new Date().toISOString(),
+        })
+      );
+
+      // Redirect to chat
+      router.push(`/chat/${data.agentId}`);
     } catch (err) {
       setStep('error');
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
@@ -127,15 +169,12 @@ export default function Home() {
   ] as const;
 
   return (
-    <main className="relative min-h-screen flex flex-col items-center justify-center px-4 py-8 sm:p-8">
+    <main className="relative min-h-screen flex flex-col items-center justify-center px-4 pt-20 pb-8 sm:pt-24 sm:pb-8">
       <WaveBackground />
-
-      <div className="absolute top-4 right-4 z-10">
-        <ThemeToggle />
-      </div>
+      <Header />
 
       <AnimatePresence mode="wait">
-        {(step === 'idle' || step === 'error' || step === 'creating') ? (
+        {(step === 'idle' || step === 'error') ? (
           <motion.div
             key="input"
             initial={{ opacity: 0, y: 20 }}
@@ -159,7 +198,7 @@ export default function Home() {
             </motion.div>
 
             {/* URL Input */}
-            <UrlInput onSubmit={handleSubmit} isLoading={step === 'creating'} />
+            <UrlInput onSubmit={handleSubmit} isLoading={false} />
 
             {/* Error Display */}
             {step === 'error' && error && (
@@ -205,14 +244,13 @@ export default function Home() {
             </motion.div>
 
             {/* Footer */}
-            <motion.p
-              className="text-xs sm:text-sm text-muted-foreground/60 mt-4 sm:mt-8"
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.6 }}
             >
-              Powered by DigitalOcean Gradient AI
-            </motion.p>
+              <Footer />
+            </motion.div>
           </motion.div>
         ) : (
           <motion.div
@@ -220,7 +258,7 @@ export default function Home() {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="w-full px-4"
+            className="w-full max-w-md px-4 flex items-center justify-center"
           >
             <ProgressIndicator steps={getProgressSteps()} error={error} />
           </motion.div>

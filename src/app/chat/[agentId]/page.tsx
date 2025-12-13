@@ -5,10 +5,12 @@ import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ArrowLeft, ExternalLink, Trash2 } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { AgentHistory } from '@/components/agent-history';
 import { ChatMessage, ChatMessageSkeleton } from '@/components/chat-message';
 import { ChatInput } from '@/components/chat-input';
 import { SammyAvatar } from '@/components/sammy-avatar';
 import { Button } from '@/components/ui/button';
+import { Footer } from '@/components/footer';
 import type { ChatMessage as ChatMessageType, StoredAgent } from '@/types';
 
 export default function ChatPage() {
@@ -146,7 +148,9 @@ export default function ChatPage() {
             </Button>
             <SammyAvatar size="sm" animated={false} />
             <div>
-              <h1 className="font-semibold text-foreground">SharkByte Support</h1>
+              <h1 className="font-semibold text-foreground">
+                {agent.name || 'SharkByte Support'}
+              </h1>
               <a
                 href={agent.url}
                 target="_blank"
@@ -168,6 +172,7 @@ export default function ChatPage() {
             >
               <Trash2 className="w-4 h-4" />
             </Button>
+            <AgentHistory />
             <ThemeToggle />
           </div>
         </div>
@@ -184,14 +189,14 @@ export default function ChatPage() {
             >
               <SammyAvatar size="xl" className="mb-6" />
               <h2 className="text-2xl font-semibold text-foreground mb-2">
-                Hi, I&apos;m SharkByte!
+                Hi, I&apos;m Sammy!
               </h2>
               <p className="text-muted-foreground text-center max-w-md mb-6">
-                I&apos;ve learned everything about{' '}
+                I&apos;m your AI support agent for{' '}
                 <span className="text-primary font-medium">
                   {new URL(agent.url).hostname}
                 </span>
-                . Ask me anything!
+                . Ask me anything about this website!
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-md">
                 {[
@@ -230,6 +235,11 @@ export default function ChatPage() {
 
       {/* Input */}
       <ChatInput onSend={sendMessage} isLoading={isLoading} />
+
+      {/* Footer */}
+      <div className="py-4 border-t border-border bg-card/50">
+        <Footer />
+      </div>
 
       {/* Delete agent button (hidden in corner) */}
       <button
