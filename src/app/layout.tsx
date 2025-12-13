@@ -9,9 +9,19 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://sharkbyte-support.vercel.app"),
   title: "SharkByte Support",
   description: "Smart support in every byte. Transform any website into an AI-powered customer support agent.",
   keywords: ["AI", "chatbot", "customer support", "DigitalOcean", "Gradient AI"],
+  icons: {
+    icon: "/sammy/transparent/sammy-front-transparent.png",
+    apple: "/sammy/transparent/sammy-front-transparent.png",
+  },
+  openGraph: {
+    title: "SharkByte Support",
+    description: "Transform any website into an AI-powered customer support agent in seconds.",
+    images: ["/sammy/transparent/sammy-normal-transparent.png"],
+  },
 };
 
 export default function RootLayout({

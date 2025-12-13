@@ -1,10 +1,13 @@
 # SharkByte Support
 
-**Smart support in every byte.**
+<p align="center">
+  <img src="./public/sammy/transparent/sammy-animated-transparent.gif" alt="Sammy the Shark" width="200" />
+</p>
 
-Transform any website into an AI-powered customer support agent in seconds.
-
-<!-- ![SharkByte Demo](./public/demo.gif) -->
+<p align="center">
+  <strong>Smart support in every byte.</strong><br/>
+  Transform any website into an AI-powered customer support agent in seconds.
+</p>
 
 ---
 
