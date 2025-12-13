@@ -149,7 +149,7 @@ export default function Home() {
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
             >
-              <SammyAvatar size="xl" className="mx-auto mb-4" />
+              <SammyAvatar size="hero" className="mx-auto mb-4" />
               <h1 className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-[var(--do-blue)] to-[var(--do-teal)] bg-clip-text text-transparent">
                 SharkByte Support
               </h1>

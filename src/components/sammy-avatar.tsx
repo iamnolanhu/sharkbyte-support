@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
 interface SammyAvatarProps {
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | 'hero';
   variant?: 'normal' | 'front' | 'jetpack' | 'balloon';
   animated?: boolean;
   className?: string;
@@ -16,6 +16,9 @@ const sizes = {
   md: { container: 'w-12 h-12', pixels: 48 },
   lg: { container: 'w-16 h-16', pixels: 64 },
   xl: { container: 'w-24 h-24', pixels: 96 },
+  '2xl': { container: 'w-32 h-32', pixels: 128 },
+  '3xl': { container: 'w-40 h-40', pixels: 160 },
+  hero: { container: 'w-48 h-48', pixels: 192 },
 };
 
 const variants = {
@@ -55,8 +58,16 @@ export function SammyAvatar({
     return (
       <motion.div
         className={containerClass}
-        animate={{ y: [0, -5, 0] }}
-        transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' as const }}
+        animate={{
+          y: [0, -12, 0],
+          rotate: [0, 3, -3, 0],
+          scale: [1, 1.02, 1],
+        }}
+        transition={{
+          duration: 2.5,
+          repeat: Infinity,
+          ease: 'easeInOut' as const,
+        }}
       >
         {imageElement}
       </motion.div>
@@ -71,31 +82,41 @@ export function SammyLoading({ className }: { className?: string }) {
     <div className={cn('flex flex-col items-center gap-4', className)}>
       <motion.div
         animate={{
-          rotate: [0, 10, -10, 0],
-          y: [0, -10, 0],
+          rotate: [0, 15, -15, 0],
+          y: [0, -20, 0],
+          x: [0, 10, -10, 0],
+          scale: [1, 1.1, 1],
         }}
         transition={{
-          duration: 1.5,
+          duration: 2,
           repeat: Infinity,
           ease: 'easeInOut' as const,
         }}
       >
-        <SammyAvatar size="xl" variant="jetpack" animated={false} />
+        <SammyAvatar size="3xl" variant="jetpack" animated={false} />
       </motion.div>
       <motion.div
-        className="flex gap-1"
+        className="flex gap-2"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
       >
-        {[0, 1, 2].map((i) => (
+        {[0, 1, 2, 3].map((i) => (
           <motion.div
             key={i}
-            className="w-2 h-2 rounded-full bg-[var(--do-blue)]"
-            animate={{ y: [0, -8, 0] }}
+            className="w-3 h-3 rounded-full bg-[var(--do-blue)]"
+            style={{
+              boxShadow: '0 0 8px rgba(0, 105, 255, 0.5)',
+            }}
+            animate={{
+              y: [0, -12, 0],
+              scale: [1, 1.3, 1],
+              opacity: [0.5, 1, 0.5],
+            }}
             transition={{
-              duration: 0.6,
+              duration: 0.8,
               repeat: Infinity,
               delay: i * 0.15,
+              ease: 'easeInOut' as const,
             }}
           />
         ))}
