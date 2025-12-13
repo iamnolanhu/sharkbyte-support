@@ -31,8 +31,9 @@ SharkByte instantly creates an AI chatbot that can answer questions about any we
 
 ## Tech Stack
 
-- **Framework**: Next.js 14 (App Router)
-- **Styling**: Tailwind CSS + shadcn/ui
+- **Framework**: Next.js 16 (App Router + Turbopack)
+- **UI Library**: React 19.2
+- **Styling**: Tailwind CSS v4 + shadcn/ui
 - **AI**: DigitalOcean Gradient AI
 - **Deployment**: Vercel
 
