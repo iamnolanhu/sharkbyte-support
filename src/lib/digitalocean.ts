@@ -3,6 +3,7 @@
  */
 
 import type {
+  Agent,
   CreateKBResponse,
   GetKBResponse,
   ListKBResponse,
@@ -12,6 +13,14 @@ import type {
   CreateAccessKeyResponse,
 } from '@/types';
 import { DO_CONFIG, CRAWLER_CONFIG } from './config';
+
+// Normalize KB IDs from various API response field names
+export function getKnowledgeBaseIds(agent: Agent): string[] {
+  if (agent.knowledge_base_ids?.length) return agent.knowledge_base_ids;
+  if (agent.knowledge_base_uuids?.length) return agent.knowledge_base_uuids;
+  if (agent.knowledge_base_uuid) return [agent.knowledge_base_uuid];
+  return [];
+}
 
 function getHeaders(): HeadersInit {
   return {
@@ -357,11 +366,20 @@ Guidelines:
 export async function createAgent(
   options: CreateAgentOptions
 ): Promise<CreateAgentResponse> {
+  // Fetch KB details to use its project_id and region for consistency
+  // This ensures the agent is created in the same project/region as its KBs
+  const primaryKbId = options.knowledgeBaseIds[0];
+  const kbResponse = await getKnowledgeBase(primaryKbId);
+  const kb = kbResponse.knowledge_base;
+
+  console.log(`Using KB project: ${kb.project_id}`);
+  console.log(`Using KB region: ${kb.region}`);
+
   const requestBody = {
     name: options.name,
     model_uuid: DO_CONFIG.DEFAULT_LLM_MODEL_UUID,
-    project_id: DO_CONFIG.PROJECT_ID,
-    region: DO_CONFIG.DEFAULT_REGION,
+    project_id: kb.project_id,
+    region: kb.region,
     knowledge_base_ids: options.knowledgeBaseIds,
     instruction: options.instruction,
     ...(options.description && { description: options.description }),
@@ -394,7 +412,8 @@ export async function createAgent(
       statusText,
       errorId: error.id,
       errorMessage,
-      projectId: DO_CONFIG.PROJECT_ID,
+      kbProjectId: kb.project_id,
+      kbRegion: kb.region,
       hasApiToken: !!DO_CONFIG.API_TOKEN,
     };
 
@@ -404,7 +423,7 @@ export async function createAgent(
         `Agent creation failed with PermissionDenied error. ` +
         `This usually means:\n` +
         `1. The API token (DO_API_TOKEN) doesn't have permission to create agents\n` +
-        `2. The project ID (DO_PROJECT_ID: ${DO_CONFIG.PROJECT_ID}) is incorrect or the token doesn't have access to it\n` +
+        `2. The KB's project ID (${kb.project_id}) or region (${kb.region}) has access issues\n` +
         `3. The API token may need to be regenerated with proper permissions\n` +
         `\nError details: ${JSON.stringify(errorDetails)}`
       );
@@ -515,7 +534,7 @@ export async function updateAgentVisibility(
 // Delete agent and all its associated KBs
 export async function deleteAgentWithKBs(agentId: string): Promise<void> {
   const agentResponse = await getAgent(agentId);
-  const kbIds = agentResponse.agent.knowledge_base_ids || [];
+  const kbIds = getKnowledgeBaseIds(agentResponse.agent);
 
   // Delete agent first
   await deleteAgent(agentId);
