@@ -146,13 +146,18 @@ vercel deploy --prod
 
 ```
 sharkbyte-support/
+├── public/
+│   ├── images/       # Screenshots & hackathon photos
+│   ├── sammy/        # Sammy mascot assets
+│   └── widget.js     # Embeddable chat widget
+├── scripts/          # Dev utilities (cleanup, create-agent)
 ├── src/
-│   ├── app/          # Next.js pages and API routes
+│   ├── app/          # Next.js pages & API routes
 │   ├── components/   # React components
-│   ├── lib/          # Utilities and API clients
-│   └── types/        # TypeScript types
-├── public/           # Static assets
-└── README.md
+│   ├── lib/          # DigitalOcean client, config, utils
+│   ├── styles/       # Theme system
+│   └── types/        # TypeScript interfaces
+└── [config files]    # package.json, tsconfig, etc.
 ```
 
 ---

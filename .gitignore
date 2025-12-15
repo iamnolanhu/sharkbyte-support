@@ -49,3 +49,6 @@ next-env.d.ts
 .serena/
 .env.backup
 .env.backup_v2
+
+# Archived scripts
+scripts/archive/
