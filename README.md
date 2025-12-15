@@ -5,6 +5,12 @@
 </p>
 
 <p align="center">
+  <a href="https://devpost.com/software/sharkbyte-support">
+    <img src="https://img.shields.io/badge/%F0%9F%8F%86_3rd_Place-MLH_x_DigitalOcean_Hackathon-0080FF?style=for-the-badge" alt="3rd Place - MLH x DigitalOcean Hackathon" />
+  </a>
+</p>
+
+<p align="center">
   <strong>Smart support in every byte.</strong><br/>
   Transform any website into an AI-powered customer support agent in seconds.
 </p>
@@ -29,6 +35,25 @@ SharkByte instantly creates an AI chatbot that can answer questions about any we
 - **Streaming Responses** - Real-time chat experience
 - **Theme Options** - Light, Dark, and Ocean modes
 - **Mobile Friendly** - Works on all devices
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="./public/images/SharkByte-Homepage.png" alt="SharkByte Homepage" width="600" />
+</p>
+<p align="center"><em>Homepage - Enter any URL to create an AI support agent</em></p>
+
+<p align="center">
+  <img src="./public/images/SharkByte-Agent-Config.png" alt="Agent Configuration" width="600" />
+</p>
+<p align="center"><em>Agent configuration with embed code</em></p>
+
+<p align="center">
+  <img src="./public/images/SharkByte-Agent-Chat.png" alt="Chat Interface" width="600" />
+</p>
+<p align="center"><em>AI chat powered by DigitalOcean Gradient</em></p>
 
 ---
 
@@ -73,10 +98,22 @@ npm run dev
 Create a `.env.local` file:
 
 ```env
-DO_API_TOKEN=your_digitalocean_api_token
-DO_REGION=nyc3
-DO_EMBEDDING_MODEL=text-embedding-3-small
-DO_LLM_MODEL=gpt-4o
+# Required
+DO_API_TOKEN=your_digitalocean_api_token      # https://cloud.digitalocean.com/account/api/tokens
+FIRECRAWL_API_KEY=your_firecrawl_api_key      # https://firecrawl.dev
+DO_PROJECT_ID=your_project_id                  # Your DigitalOcean project UUID
+
+# DigitalOcean Gradient AI
+DO_REGION=tor1                                 # Only tor1 supports gen-ai agents
+DO_EMBEDDING_MODEL_UUID=22653204-79ed-11ef-bf8f-4e013e2ddde4  # gte-large (default)
+DO_LLM_MODEL_UUID=18bc9b8f-73c5-11f0-b074-4e013e2ddde4        # GPT-oss-120b (default)
+
+# Optional - Reuse existing database
+DO_DATABASE_ID=your_database_id
+
+# Optional - Demo chat widget on landing page
+NEXT_PUBLIC_DEMO_AGENT_ENDPOINT=https://your-demo-agent.agents.do-ai.run
+NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY=your_demo_access_key
 ```
 
 ---
@@ -122,7 +159,17 @@ sharkbyte-support/
 
 ## Team
 
-**The Sharks** - MLH x DigitalOcean Hackathon 2025
+<p align="center">
+  <img src="./public/images/hackathon-3rd-place.webp" alt="The Sharks - 3rd Place" height="220" />
+  &nbsp;&nbsp;&nbsp;
+  <img src="./public/images/3rd-place-prize.png" alt="3rd Place Prize" height="220" />
+</p>
+
+<p align="center"><strong>The Sharks</strong> 🦈 - <strong>3rd Place</strong> at MLH x DigitalOcean Hackathon 2025</p>
+
+<p align="center">
+  <a href="https://devpost.com/software/sharkbyte-support">View on Devpost</a> | <a href="https://sharkbyte-support.vercel.app/">Live Demo</a>
+</p>
 
 ---
 
@@ -138,4 +185,4 @@ sharkbyte-support/
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+**Dual License** - Free for non-commercial and open source use. Commercial use requires a paid license. See [LICENSE](LICENSE) for details.
