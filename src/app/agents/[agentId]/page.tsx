@@ -104,7 +104,9 @@ export default function AgentManagementPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isRepairing, setIsRepairing] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [repairSuccess, setRepairSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -192,6 +194,38 @@ export default function AgentManagementPage() {
       console.error('Failed to delete agent:', err);
       setError('Failed to delete agent');
       setIsDeleting(false);
+    }
+  };
+
+  const handleRepair = async () => {
+    setIsRepairing(true);
+    setRepairSuccess(null);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/agents/${agentId}/repair`, {
+        method: 'POST',
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setRepairSuccess(data.message);
+        setTimeout(() => setRepairSuccess(null), 5000);
+        // Refresh agent data to show updated KBs
+        const agentRes = await fetch(`/api/agents/${agentId}`);
+        const agentData = await agentRes.json();
+        if (agentData.success && agentData.agent) {
+          setAgent(agentData.agent);
+        }
+      } else {
+        setError(data.error || 'Failed to repair');
+      }
+    } catch (err) {
+      console.error('Failed to repair agent:', err);
+      setError('Failed to repair agent');
+    } finally {
+      setIsRepairing(false);
     }
   };
 
@@ -314,9 +348,33 @@ export default function AgentManagementPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
           >
-            <h2 className="text-lg font-semibold text-foreground mb-4">
-              Knowledge Bases
-            </h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-foreground">
+                Knowledge Bases
+              </h2>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRepair}
+                disabled={isRepairing}
+                className="gap-2"
+              >
+                {isRepairing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4" />
+                )}
+                Repair KBs
+              </Button>
+            </div>
+            {repairSuccess && (
+              <div className="mb-4 p-3 rounded-lg bg-green-500/10 border border-green-500/30">
+                <p className="text-sm text-green-500 flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4" />
+                  {repairSuccess}
+                </p>
+              </div>
+            )}
             <div className="grid gap-4 md:grid-cols-3">
               <KBCard
                 kb={crawlKB}

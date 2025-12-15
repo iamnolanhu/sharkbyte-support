@@ -327,10 +327,13 @@ export async function attachKnowledgeBaseToAgent(
   kbId: string
 ): Promise<void> {
   const response = await fetch(
-    `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/knowledge_bases/${kbId}`,
+    `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/knowledge_bases`,
     {
       method: 'POST',
       headers: getHeaders(),
+      body: JSON.stringify({
+        knowledge_base_uuids: [kbId],
+      }),
     }
   );
 
@@ -685,6 +688,100 @@ export async function findKBByDomain(
       kb.name.toLowerCase().includes(domain.toLowerCase())
     ) || null
   );
+}
+
+// Find KB with exact domain match using standardized naming convention
+// This prevents duplicates by checking for exact name match
+export async function findKBByDomainExact(
+  domain: string
+): Promise<KnowledgeBase | null> {
+  const { knowledge_bases } = await listKnowledgeBases();
+  const expectedName = generateCrawlKBName(`https://${domain}`);
+  return knowledge_bases.find((kb) => kb.name === expectedName) || null;
+}
+
+// Get existing KB or create new one - prevents duplicates
+// Always checks for existing KB before creating
+export async function getOrCreateKnowledgeBase(
+  options: CreateKBOptions & { url: string }
+): Promise<{ kb: KnowledgeBase; isExisting: boolean }> {
+  const domain = extractDomain(options.url);
+  const existingKB = await findKBByDomainExact(domain);
+
+  if (existingKB) {
+    console.log(`Found existing KB: ${existingKB.name} (${existingKB.uuid})`);
+    return { kb: existingKB, isExisting: true };
+  }
+
+  console.log(`No existing KB found for ${domain}, creating new one...`);
+  const response = await createKnowledgeBaseSmartCrawl(options);
+  return { kb: response.knowledge_base, isExisting: false };
+}
+
+// ============================================
+// Repair Functions
+// ============================================
+
+export interface RepairResult {
+  attached: string[];
+  alreadyAttached: string[];
+  notFound: string[];
+}
+
+/**
+ * Repair agent KB attachments by finding orphaned KBs that match the agent's domain
+ * and attaching them automatically.
+ */
+export async function repairAgentKBs(agentId: string): Promise<RepairResult> {
+  const agentResponse = await getAgent(agentId);
+  const agent = agentResponse.agent;
+
+  // Extract domain from agent name "Sammy - domain.com"
+  const domainMatch = agent.name.match(/Sammy - (.+)/);
+  if (!domainMatch) {
+    throw new Error('Cannot extract domain from agent name');
+  }
+  const domain = domainMatch[1];
+
+  // Generate expected KB names based on domain
+  const domainSlug = domain.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+  const expectedKBNames = [
+    `${domainSlug}-crawl`,
+    `${domainSlug}-uploads`,
+    `${domainSlug}-structured`,
+  ];
+
+  console.log(`Repairing KBs for agent ${agent.name}, looking for: ${expectedKBNames.join(', ')}`);
+
+  // Get existing attached KBs
+  const existingKBIds = new Set(getKnowledgeBaseIds(agent));
+
+  // Find matching KBs from all KBs
+  const { knowledge_bases } = await listKnowledgeBases();
+  const results: RepairResult = {
+    attached: [],
+    alreadyAttached: [],
+    notFound: [],
+  };
+
+  for (const expectedName of expectedKBNames) {
+    const kb = knowledge_bases.find((k) => k.name === expectedName);
+    if (!kb) {
+      results.notFound.push(expectedName);
+      continue;
+    }
+    if (existingKBIds.has(kb.uuid)) {
+      results.alreadyAttached.push(kb.name);
+      continue;
+    }
+    // Attach the KB to the agent
+    console.log(`Attaching KB ${kb.name} (${kb.uuid}) to agent ${agentId}`);
+    await attachKnowledgeBaseToAgent(agentId, kb.uuid);
+    results.attached.push(kb.name);
+  }
+
+  console.log('Repair results:', results);
+  return results;
 }
 
 // ============================================

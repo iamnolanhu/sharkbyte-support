@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  createKnowledgeBaseSmartCrawl,
   createAgent,
   createAccessKey,
   getAgent,
@@ -13,6 +12,7 @@ import {
   findAgentByDomain,
   getDefaultInstruction,
   getKnowledgeBaseIds,
+  getOrCreateKnowledgeBase,
 } from '@/lib/digitalocean';
 import type { CreateAgentRequest, CreateAgentApiResponse } from '@/types';
 
@@ -69,22 +69,25 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Step 2: Create 3 Knowledge Bases
-    console.log(`Creating Knowledge Bases for ${domain}...`);
-
-    // 2a: Create crawl KB (with web crawler)
+    // Step 2: Get or create Knowledge Base (prevents duplicates)
     const crawlKBName = generateCrawlKBName(normalizedUrl);
-    console.log(`  Creating crawl KB: ${crawlKBName}...`);
-    const crawlKBResponse = await createKnowledgeBaseSmartCrawl({
+    console.log(`Checking for existing KB: ${crawlKBName}...`);
+
+    const { kb: crawlKB, isExisting: kbExists } = await getOrCreateKnowledgeBase({
       name: crawlKBName,
       seedUrls: [normalizedUrl],
+      url: normalizedUrl,
     });
-    const crawlKBId = crawlKBResponse.knowledge_base.uuid;
-    console.log(`  Crawl KB created: ${crawlKBId}`);
+    const crawlKBId = crawlKB.uuid;
 
-    // Wait for database to be provisioned
-    console.log(`  Waiting for database to be ready...`);
-    await waitForDatabaseReady(crawlKBId, 120000, 5000);
+    if (kbExists) {
+      console.log(`Using existing KB: ${crawlKBId}`);
+    } else {
+      console.log(`Created new KB: ${crawlKBId}`);
+      // Wait for database to be provisioned (only needed for new KBs)
+      console.log(`Waiting for database to be ready...`);
+      await waitForDatabaseReady(crawlKBId, 120000, 5000);
+    }
 
     // Note: uploads/structured KBs will be created later when users upload files
     const allKBIds = [crawlKBId];

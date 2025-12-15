@@ -7,6 +7,8 @@ import {
   createAccessKey,
   getKBTypeFromName,
   extractDomain,
+  repairAgentKBs,
+  getKnowledgeBaseIds,
 } from '@/lib/digitalocean';
 import type { KnowledgeBaseInfo, AgentWithKBs } from '@/types';
 
@@ -22,8 +24,25 @@ export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const { agentId } = await context.params;
 
-    const agentResponse = await getAgent(agentId);
-    const agent = agentResponse.agent;
+    let agentResponse = await getAgent(agentId);
+    let agent = agentResponse.agent;
+
+    // Auto-repair: If no KBs are attached, try to find and attach orphaned KBs
+    const kbIds = getKnowledgeBaseIds(agent);
+    if (kbIds.length === 0) {
+      console.log(`No KBs attached to agent ${agentId}, attempting auto-repair...`);
+      try {
+        const repairResult = await repairAgentKBs(agentId);
+        console.log('Auto-repair result:', repairResult);
+        if (repairResult.attached.length > 0) {
+          // Re-fetch agent to get updated KB list
+          agentResponse = await getAgent(agentId);
+          agent = agentResponse.agent;
+        }
+      } catch (err) {
+        console.error('Auto-repair failed:', err);
+      }
+    }
 
     // Fetch all KB details
     const knowledgeBases: KnowledgeBaseInfo[] = [];
