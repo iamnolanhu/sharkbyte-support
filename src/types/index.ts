@@ -129,6 +129,18 @@ export interface CreateAccessKeyResponse {
   access_key?: AccessKey;      // Legacy format
 }
 
+export interface ListedApiKey {
+  uuid: string;
+  name: string;
+  created_by?: string;
+  created_at?: string;
+  // Note: secret_key is NOT returned when listing - only on creation
+}
+
+export interface ListAccessKeysResponse {
+  api_keys: ListedApiKey[];
+}
+
 // ============================================
 // Chat Types
 // ============================================

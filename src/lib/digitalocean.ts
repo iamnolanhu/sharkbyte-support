@@ -11,6 +11,7 @@ import type {
   CreateAgentResponse,
   GetAgentResponse,
   CreateAccessKeyResponse,
+  ListAccessKeysResponse,
 } from '@/types';
 import { DO_CONFIG, CRAWLER_CONFIG, FIRECRAWL_CONFIG, CONTENT_QUALITY_CONFIG } from './config';
 import { scrapeUrl } from './firecrawl';
@@ -824,6 +825,55 @@ export async function createAccessKey(
   }
 
   return response.json();
+}
+
+// List existing API keys for an agent
+export async function listAccessKeys(
+  agentId: string
+): Promise<ListAccessKeysResponse> {
+  const response = await fetch(
+    `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/api_keys`,
+    {
+      method: 'GET',
+      headers: getHeaders(),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to list API Keys: ${JSON.stringify(error)}`);
+  }
+
+  return response.json();
+}
+
+// Get existing API key or create new one if none exist
+// Note: When listing, we only get uuid/name - not the secret key
+// The secret is only returned at creation time
+// For existing keys, we return the uuid which can be used for identification
+export async function getOrCreateAccessKey(
+  agentId: string
+): Promise<{ key: string; isNew: boolean }> {
+  try {
+    // Check for existing keys
+    const existingKeys = await listAccessKeys(agentId);
+    if (existingKeys.api_keys && existingKeys.api_keys.length > 0) {
+      // Return first existing key's uuid - the actual secret is not retrievable
+      // For widget embedding, we need to create a new key to get the secret
+      console.log(`Agent ${agentId} has ${existingKeys.api_keys.length} existing API keys`);
+    }
+  } catch (error) {
+    console.log(`Could not list API keys for ${agentId}:`, error);
+  }
+
+  // Always create a new key since we can't retrieve secrets of existing keys
+  // But at least we logged how many exist
+  const keyResponse = await createAccessKey(agentId);
+  const key = keyResponse.api_key_info?.secret_key ||
+              keyResponse.access_key?.key ||
+              keyResponse.access_key?.api_key || '';
+
+  return { key, isNew: true };
 }
 
 // ============================================

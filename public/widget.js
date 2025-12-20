@@ -10,6 +10,8 @@
 
   var config = {
     agentId: script.getAttribute('data-agent-id'),
+    endpoint: script.getAttribute('data-endpoint'),
+    accessKey: script.getAttribute('data-access-key'),
     primaryColor: script.getAttribute('data-primary-color') || '#0080FF',
     position: script.getAttribute('data-position') || 'bottom-right',
     welcomeMessage: script.getAttribute('data-welcome-message') || '',
@@ -18,6 +20,10 @@
   // Validate required config
   if (!config.agentId) {
     console.error('SharkByte Widget: data-agent-id is required');
+    return;
+  }
+  if (!config.endpoint || !config.accessKey) {
+    console.error('SharkByte Widget: data-endpoint and data-access-key are required');
     return;
   }
 
@@ -40,6 +46,8 @@
   // Create iframe
   var iframe = document.createElement('iframe');
   var params = new URLSearchParams({
+    endpoint: config.endpoint,
+    accessKey: config.accessKey,
     color: config.primaryColor,
     position: config.position,
   });

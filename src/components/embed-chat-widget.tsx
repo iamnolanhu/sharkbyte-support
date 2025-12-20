@@ -135,7 +135,8 @@ export function EmbedChatWidget({
     setStreamingContent('');
 
     try {
-      const response = await fetch(`/api/widget/${agentId}`, {
+      // Use absolute URL since widget runs in iframe on external sites
+      const response = await fetch(`https://sharkbyte-support.vercel.app/api/widget/${agentId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

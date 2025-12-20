@@ -99,6 +99,7 @@ export default function AgentManagementPage() {
   const agentId = params.agentId as string;
 
   const [agent, setAgent] = useState<AgentWithKBs | null>(null);
+  const [accessKey, setAccessKey] = useState<string>('');
   const [instruction, setInstruction] = useState('');
   const [originalInstruction, setOriginalInstruction] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -113,13 +114,17 @@ export default function AgentManagementPage() {
   useEffect(() => {
     async function loadAgent() {
       try {
-        const res = await fetch(`/api/agents/${agentId}`);
+        // Include accessKey=true to get an access key for the embed code
+        const res = await fetch(`/api/agents/${agentId}?includeAccessKey=true`);
         const data = await res.json();
 
         if (data.success && data.agent) {
           setAgent(data.agent);
           setInstruction(data.instruction || '');
           setOriginalInstruction(data.instruction || '');
+          if (data.accessKey) {
+            setAccessKey(data.accessKey);
+          }
         } else {
           setError(data.error || 'Agent not found');
         }
@@ -414,45 +419,55 @@ export default function AgentManagementPage() {
               <p className="text-sm text-muted-foreground mb-4">
                 Add this code to your website to embed the chat widget. Place it just before the closing <code className="bg-muted px-1 rounded">&lt;/body&gt;</code> tag.
               </p>
-              <div className="relative">
-                <pre className="bg-muted p-4 rounded-lg overflow-x-auto text-sm">
-                  <code className="text-foreground">{`<script
+              {accessKey ? (
+                <div className="relative">
+                  <pre className="bg-muted p-4 rounded-lg overflow-x-auto text-sm">
+                    <code className="text-foreground">{`<script
   src="https://sharkbyte-support.vercel.app/widget.js"
   data-agent-id="${agentId}"
+  data-endpoint="${agent?.endpoint || ''}"
+  data-access-key="${accessKey}"
   data-primary-color="#0080FF"
   data-position="bottom-right"
   async
 ></script>`}</code>
-                </pre>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="absolute top-2 right-2 gap-1"
-                  onClick={() => {
-                    navigator.clipboard.writeText(`<script
+                  </pre>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="absolute top-2 right-2 gap-1"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`<script
   src="https://sharkbyte-support.vercel.app/widget.js"
   data-agent-id="${agentId}"
+  data-endpoint="${agent?.endpoint || ''}"
+  data-access-key="${accessKey}"
   data-primary-color="#0080FF"
   data-position="bottom-right"
   async
 ></script>`);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 2000);
-                  }}
-                >
-                  {copied ? (
-                    <>
-                      <Check className="w-3 h-3" />
-                      Copied!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3 h-3" />
-                      Copy
-                    </>
-                  )}
-                </Button>
-              </div>
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-3 h-3" />
+                        Copied!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" />
+                        Copy
+                      </>
+                    )}
+                  </Button>
+                </div>
+              ) : (
+                <div className="bg-muted p-4 rounded-lg text-sm text-muted-foreground">
+                  Loading embed code...
+                </div>
+              )}
               <div className="mt-4 text-sm text-muted-foreground">
                 <p className="font-medium text-foreground mb-2">Customization options:</p>
                 <ul className="list-disc list-inside space-y-1">

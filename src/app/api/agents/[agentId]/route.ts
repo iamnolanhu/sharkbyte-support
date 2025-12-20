@@ -9,6 +9,7 @@ import {
   extractDomain,
   repairAgentKBs,
   getKnowledgeBaseIds,
+  listAccessKeys,
 } from '@/lib/digitalocean';
 import type { KnowledgeBaseInfo, AgentWithKBs } from '@/types';
 
@@ -77,6 +78,29 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const domainMatch = agent.name.match(/Sammy - (.+)/);
     const domain = domainMatch ? domainMatch[1] : extractDomain(agent.name);
 
+    // Check if we need to create an access key for the embed code
+    // Only create if includeAccessKey=true query param is present
+    const url = new URL(request.url);
+    const includeAccessKey = url.searchParams.get('includeAccessKey') === 'true';
+    let accessKey = '';
+
+    if (includeAccessKey) {
+      try {
+        // Check existing keys first to log count (helps with debugging)
+        const existingKeys = await listAccessKeys(agentId);
+        console.log(`Agent ${agentId} has ${existingKeys.api_keys?.length || 0} existing API keys`);
+
+        // Create a new key for the embed code
+        // (Unfortunately DO API doesn't return secrets for existing keys)
+        const keyResponse = await createAccessKey(agentId);
+        accessKey = keyResponse.api_key_info?.secret_key ||
+                   keyResponse.access_key?.key ||
+                   keyResponse.access_key?.api_key || '';
+      } catch (error) {
+        console.error('Failed to create access key:', error);
+      }
+    }
+
     const agentWithKBs: AgentWithKBs = {
       uuid: agent.uuid,
       name: agent.name,
@@ -97,6 +121,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       success: true,
       agent: agentWithKBs,
       instruction: agent.instruction,
+      accessKey: accessKey || undefined,
     });
   } catch (error) {
     console.error('Error getting agent:', error);
