@@ -43,9 +43,10 @@ export const DO_CONFIG = {
 } as const;
 
 // Demo Agent Configuration
-// Dynamically detects deployment domain for self-healing demo agent
-function getDemoAgentDomain(): string {
-  // Check for explicit app URL first
+// Uses VERCEL_PROJECT_PRODUCTION_URL to get canonical production domain (not preview URLs)
+// Returns null for localhost/dev - widget won't show in development
+function getProductionDomain(): string | null {
+  // 1. Explicit APP_URL for custom deployments
   if (process.env.APP_URL) {
     try {
       return new URL(process.env.APP_URL).host;
@@ -54,33 +55,29 @@ function getDemoAgentDomain(): string {
     }
   }
 
-  // Vercel deployment URLs
-  const vercelUrl = process.env.VERCEL_URL || process.env.NEXT_PUBLIC_VERCEL_URL;
-  if (vercelUrl) {
-    // VERCEL_URL doesn't include protocol
-    return vercelUrl.replace(/^https?:\/\//, '');
+  // 2. Vercel: Use PRODUCTION URL (not preview URL!)
+  // VERCEL_PROJECT_PRODUCTION_URL is the canonical production domain
+  // This is available on ALL deployments (production + preview)
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return process.env.VERCEL_PROJECT_PRODUCTION_URL;
   }
 
-  // Development fallback
-  return 'localhost:3000';
-}
-
-function getDemoAgentUrl(): string {
-  const domain = getDemoAgentDomain();
-  // Use https for production, http for localhost
-  const protocol = domain.startsWith('localhost') ? 'http' : 'https';
-  return `${protocol}://${domain}`;
+  // 3. No production domain available (localhost, non-Vercel dev)
+  // Return null - demo widget won't show in development
+  return null;
 }
 
 export const DEMO_AGENT_CONFIG = {
-  get URL() {
-    return getDemoAgentUrl();
+  get DOMAIN(): string | null {
+    return getProductionDomain();
   },
-  get NAME() {
-    return `Sammy - ${getDemoAgentDomain()}`;
+  get URL(): string | null {
+    const domain = getProductionDomain();
+    return domain ? `https://${domain}` : null;
   },
-  get DOMAIN() {
-    return getDemoAgentDomain();
+  get NAME(): string | null {
+    const domain = getProductionDomain();
+    return domain ? `Sammy - ${domain}` : null;
   },
 };
 

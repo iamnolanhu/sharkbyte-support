@@ -1,8 +1,8 @@
 /**
  * Demo Agent Auto-Creation
  *
- * Ensures a demo agent exists for the requesting domain.
- * Uses request-based domain detection for automatic multi-domain support.
+ * Ensures a demo agent exists for the production domain.
+ * Uses VERCEL_PROJECT_PRODUCTION_URL to avoid creating duplicates for preview deployments.
  */
 
 import {
@@ -15,9 +15,10 @@ import {
   getDefaultInstruction,
   generateCrawlKBName,
 } from './digitalocean';
+import { DEMO_AGENT_CONFIG } from './config';
 
-// Map of domain -> creation promise (prevents duplicate creation per domain)
-const demoAgentPromises = new Map<string, Promise<DemoAgentResult>>();
+// Singleton promise to prevent duplicate creation attempts
+let demoAgentPromise: Promise<DemoAgentResult> | null = null;
 
 interface DemoAgentResult {
   agentId: string;
@@ -27,43 +28,40 @@ interface DemoAgentResult {
 }
 
 /**
- * Get the URL for a domain (adds protocol)
+ * Ensures the demo agent exists for the production domain.
+ * Creates it if it doesn't exist.
+ * Uses a singleton pattern to prevent duplicate creation attempts.
  */
-function getDomainUrl(domain: string): string {
-  const protocol = domain.startsWith('localhost') ? 'http' : 'https';
-  return `${protocol}://${domain}`;
-}
+export async function ensureDemoAgent(): Promise<DemoAgentResult> {
+  const domain = DEMO_AGENT_CONFIG.DOMAIN;
+  const url = DEMO_AGENT_CONFIG.URL;
+  const name = DEMO_AGENT_CONFIG.NAME;
 
-/**
- * Get the agent name for a domain
- */
-function getAgentName(domain: string): string {
-  return `Sammy - ${domain}`;
-}
-
-/**
- * Ensures the demo agent exists for the given domain. Creates it if it doesn't.
- * Uses a per-domain singleton pattern to prevent duplicate creation attempts.
- */
-export async function ensureDemoAgent(domain: string): Promise<DemoAgentResult> {
-  // Return existing promise if already in progress for this domain
-  const existingPromise = demoAgentPromises.get(domain);
-  if (existingPromise) {
-    return existingPromise;
+  // No production domain configured (localhost/dev)
+  if (!domain || !url || !name) {
+    throw new Error('No production domain configured. Demo agent only available in production.');
   }
 
-  const promise = createDemoAgentIfNeeded(domain);
-  demoAgentPromises.set(domain, promise);
+  // Return existing promise if already in progress
+  if (demoAgentPromise) {
+    return demoAgentPromise;
+  }
+
+  demoAgentPromise = createDemoAgentIfNeeded(domain, url, name);
 
   // Clean up promise after completion (success or failure)
-  promise.finally(() => {
-    demoAgentPromises.delete(domain);
+  demoAgentPromise.finally(() => {
+    demoAgentPromise = null;
   });
 
-  return promise;
+  return demoAgentPromise;
 }
 
-async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult> {
+async function createDemoAgentIfNeeded(
+  domain: string,
+  url: string,
+  name: string
+): Promise<DemoAgentResult> {
   console.log(`Checking for demo agent: ${domain}...`);
 
   try {
@@ -90,14 +88,12 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     // Create new demo agent with crawl KB
     console.log(`Creating demo agent for ${domain}...`);
 
-    const normalizedUrl = getDomainUrl(domain);
-
     // Create crawl KB
-    const crawlKBName = generateCrawlKBName(normalizedUrl);
+    const crawlKBName = generateCrawlKBName(url);
     console.log(`  Creating crawl KB: ${crawlKBName}...`);
     const crawlKBResponse = await createKnowledgeBaseSmartCrawl({
       name: crawlKBName,
-      seedUrls: [normalizedUrl],
+      seedUrls: [url],
     });
     const crawlKBId = crawlKBResponse.knowledge_base.uuid;
     console.log(`  Crawl KB created: ${crawlKBId}`);
@@ -106,15 +102,12 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     console.log(`  Waiting for database to be ready...`);
     await waitForDatabaseReady(crawlKBId, 120000, 5000);
 
-    // Note: uploads/structured KBs will be created later when users upload files
     const allKBIds = [crawlKBId];
 
     // Create agent
-    const agentName = getAgentName(domain);
-    console.log(`Creating agent: ${agentName}...`);
-
+    console.log(`Creating agent: ${name}...`);
     const agentResponse = await createAgent({
-      name: agentName,
+      name,
       knowledgeBaseIds: allKBIds,
       instruction: getDefaultInstruction(domain),
       description: `Demo customer support agent for ${domain}`,
@@ -148,9 +141,17 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
 }
 
 /**
- * Get demo agent info for the given domain without creating it
+ * Get demo agent info for the production domain without creating it.
+ * Returns null if no production domain is configured or no agent exists.
  */
-export async function getDemoAgentInfo(domain: string): Promise<DemoAgentResult | null> {
+export async function getDemoAgentInfo(): Promise<DemoAgentResult | null> {
+  const domain = DEMO_AGENT_CONFIG.DOMAIN;
+
+  // No production domain configured (localhost/dev)
+  if (!domain) {
+    return null;
+  }
+
   try {
     const existingAgent = await findAgentByDomain(domain);
 

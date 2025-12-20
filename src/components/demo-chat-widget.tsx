@@ -34,7 +34,14 @@ export function DemoChatWidget() {
           return;
         }
 
-        // Agent doesn't exist - create it
+        // No production domain configured (localhost/dev) - don't try to create
+        if (getData.message === 'No production domain configured') {
+          console.log('No production domain configured, skipping demo widget');
+          setIsLoading(false);
+          return;
+        }
+
+        // Agent doesn't exist - create it (only on production)
         console.log('Demo agent not found, creating...');
         const postRes = await fetch('/api/demo-agent', { method: 'POST' });
         const postData = await postRes.json();
@@ -42,7 +49,10 @@ export function DemoChatWidget() {
         if (postData.success && postData.agent) {
           setAgent(postData.agent);
         } else {
-          setError(postData.error || 'Failed to create demo agent');
+          // Don't show error for expected cases (no production domain)
+          if (!postData.error?.includes('No production domain')) {
+            setError(postData.error || 'Failed to create demo agent');
+          }
         }
       } catch (err) {
         console.error('Failed to load demo agent:', err);
