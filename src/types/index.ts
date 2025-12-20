@@ -6,6 +6,15 @@
 // Knowledge Base Types
 // ============================================
 
+export interface DataSourceJob {
+  data_source_uuid: string;
+  status: string;
+  indexed_item_count?: string;
+  skipped_item_count?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
 export interface IndexingJob {
   uuid: string;
   knowledge_base_uuid: string;
@@ -19,6 +28,14 @@ export interface IndexingJob {
   updated_at: string;
   started_at?: string;
   finished_at?: string;
+  completed_at?: string;
+  error?: string;
+  data_source_jobs?: DataSourceJob[];
+}
+
+export interface KnowledgeBaseDataSource {
+  web_crawler_data_source?: Record<string, unknown>;
+  file_upload_data_source?: Record<string, unknown>;
 }
 
 export interface KnowledgeBase {
@@ -33,6 +50,7 @@ export interface KnowledgeBase {
   created_at: string;
   updated_at?: string;
   last_indexing_job?: IndexingJob;
+  datasources?: KnowledgeBaseDataSource[];
 }
 
 export interface CreateKBResponse {
@@ -69,6 +87,13 @@ export interface Agent {
   };
   instruction?: string;
   created_at: string;
+  updated_at?: string;
+  // Agent configuration (optional, returned by DO API)
+  retrieval_method?: string;
+  k?: number;
+  temperature?: number;
+  top_p?: number;
+  max_tokens?: number;
 }
 
 export interface CreateAgentResponse {
@@ -196,6 +221,7 @@ export interface AgentStatusResponse {
   endpoint?: string;
   accessKey?: string;
   error?: string;
+  message?: string; // Status message for UI display (e.g., "Using enhanced scraping...")
 }
 
 // ============================================

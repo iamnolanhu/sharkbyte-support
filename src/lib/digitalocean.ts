@@ -12,13 +12,24 @@ import type {
   GetAgentResponse,
   CreateAccessKeyResponse,
 } from '@/types';
-import { DO_CONFIG, CRAWLER_CONFIG } from './config';
+import { DO_CONFIG, CRAWLER_CONFIG, FIRECRAWL_CONFIG, CONTENT_QUALITY_CONFIG } from './config';
+import { scrapeUrl } from './firecrawl';
+import OpenAI from 'openai';
 
 // Normalize KB IDs from various API response field names
 export function getKnowledgeBaseIds(agent: Agent): string[] {
+  // Try array of string IDs first
   if (agent.knowledge_base_ids?.length) return agent.knowledge_base_ids;
   if (agent.knowledge_base_uuids?.length) return agent.knowledge_base_uuids;
   if (agent.knowledge_base_uuid) return [agent.knowledge_base_uuid];
+
+  // Try array of KB objects (the format returned by attach/get APIs)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const kbs = (agent as any).knowledge_bases;
+  if (Array.isArray(kbs) && kbs.length > 0) {
+    return kbs.map((kb: { uuid: string }) => kb.uuid);
+  }
+
   return [];
 }
 
@@ -61,22 +72,9 @@ export async function createKnowledgeBaseSmartCrawl(
 ): Promise<CreateKBResponse> {
   const baseUrl = options.seedUrls[0];
 
-  // Check if sitemap exists
-  const hasSitemap = await checkSitemapExists(baseUrl);
-  console.log(
-    `Sitemap check for ${baseUrl}: ${hasSitemap ? 'found' : 'not found'}`
-  );
-
-  // Configure crawl based on sitemap availability
-  const crawlConfig = hasSitemap
-    ? {
-        base_url: `${baseUrl}/sitemap.xml`,
-        crawling_option: 'SCOPED' as const,
-      }
-    : {
-        base_url: baseUrl,
-        crawling_option: 'DOMAIN' as const,
-      };
+  // Use DOMAIN crawl for broadest coverage and fastest initial results
+  // Navigation links are included for better link discovery
+  console.log(`Creating KB with DOMAIN crawl for ${baseUrl}`);
 
   // Build request body
   const requestBody: Record<string, unknown> = {
@@ -87,10 +85,11 @@ export async function createKnowledgeBaseSmartCrawl(
     datasources: [
       {
         web_crawler_data_source: {
-          base_url: crawlConfig.base_url,
-          crawling_option: crawlConfig.crawling_option,
+          base_url: baseUrl,
+          crawling_option: 'DOMAIN',
           embed_media: CRAWLER_CONFIG.EMBED_MEDIA,
           exclude_tags: CRAWLER_CONFIG.EXCLUDE_TAGS,
+          include_navigation_links: CRAWLER_CONFIG.INCLUDE_NAVIGATION_LINKS,
         },
       },
     ],
@@ -159,6 +158,7 @@ export async function createKnowledgeBase(
           crawling_option: 'DOMAIN',
           embed_media: CRAWLER_CONFIG.EMBED_MEDIA,
           exclude_tags: CRAWLER_CONFIG.EXCLUDE_TAGS,
+          include_navigation_links: CRAWLER_CONFIG.INCLUDE_NAVIGATION_LINKS,
         },
       },
     ],
@@ -255,6 +255,124 @@ export async function deleteKnowledgeBase(kbId: string): Promise<void> {
   }
 }
 
+// ============================================
+// File Upload to KB Functions
+// ============================================
+
+interface PresignedUrlResponse {
+  uploads: Array<{
+    presigned_url: string;
+    object_key: string;
+    original_file_name: string;
+    expires_at: string;
+  }>;
+}
+
+/**
+ * Get a presigned URL for uploading a file to a KB
+ */
+async function getPresignedUploadUrl(
+  filename: string,
+  sizeInBytes: number
+): Promise<{ presignedUrl: string; objectKey: string }> {
+  const response = await fetch(
+    `${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases/data_sources/file_upload_presigned_urls`,
+    {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        files: [
+          {
+            file_name: filename,
+            size_in_bytes: sizeInBytes,
+          },
+        ],
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to get presigned URL: ${JSON.stringify(error)}`);
+  }
+
+  const data: PresignedUrlResponse = await response.json();
+  const upload = data.uploads[0];
+
+  return {
+    presignedUrl: upload.presigned_url,
+    objectKey: upload.object_key,
+  };
+}
+
+/**
+ * Add a file data source to an existing KB
+ */
+async function addFileDataSourceToKBInternal(
+  kbId: string,
+  objectKey: string,
+  filename: string,
+  sizeInBytes: number
+): Promise<void> {
+  const response = await fetch(
+    `${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases/${kbId}/data_sources`,
+    {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        file_upload_data_source: {
+          stored_object_key: objectKey,
+          original_file_name: filename,
+          size_in_bytes: sizeInBytes.toString(),
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to add data source to KB: ${JSON.stringify(error)}`);
+  }
+}
+
+/**
+ * Upload text/markdown content as a file to an existing KB
+ * This is the main function to use for adding scraped content
+ */
+export async function uploadContentToKB(
+  kbId: string,
+  content: string,
+  filename: string
+): Promise<void> {
+  const contentBuffer = Buffer.from(content, 'utf-8');
+  const sizeInBytes = contentBuffer.length;
+
+  console.log(`[DO] Uploading ${filename} (${sizeInBytes} bytes) to KB ${kbId}`);
+
+  // Step 1: Get presigned URL
+  const { presignedUrl, objectKey } = await getPresignedUploadUrl(filename, sizeInBytes);
+  console.log(`[DO] Got presigned URL, object key: ${objectKey}`);
+
+  // Step 2: Upload content to presigned URL
+  const uploadResponse = await fetch(presignedUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'text/markdown',
+      'Content-Length': sizeInBytes.toString(),
+    },
+    body: contentBuffer,
+  });
+
+  if (!uploadResponse.ok) {
+    throw new Error(`Failed to upload file: ${uploadResponse.status} ${uploadResponse.statusText}`);
+  }
+  console.log(`[DO] File uploaded to storage`);
+
+  // Step 3: Add data source to KB
+  await addFileDataSourceToKBInternal(kbId, objectKey, filename, sizeInBytes);
+  console.log(`[DO] Data source added to KB`);
+}
+
 export async function startIndexingJob(kbId: string): Promise<void> {
   const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/indexing_jobs`, {
     method: 'POST',
@@ -322,25 +440,148 @@ export async function waitForIndexing(
   throw new Error('Indexing timed out');
 }
 
+// Get content statistics for a KB
+export async function getKBContentStats(kbId: string): Promise<{
+  hasContent: boolean;
+  indexedItems: number;
+  reason?: string;
+}> {
+  const kb = await getKnowledgeBase(kbId);
+  const indexJob = kb.knowledge_base.last_indexing_job;
+
+  if (!indexJob) {
+    return { hasContent: false, indexedItems: 0, reason: 'No indexing job' };
+  }
+
+  // Check data_source_jobs for actual indexed items
+  const dsJobs = indexJob.data_source_jobs || [];
+  const totalIndexed = dsJobs.reduce((sum, job) => {
+    return sum + parseInt(job.indexed_item_count || '0', 10);
+  }, 0);
+
+  return {
+    hasContent: totalIndexed >= CRAWLER_CONFIG.MIN_USEFUL_ITEMS,
+    indexedItems: totalIndexed,
+    reason: totalIndexed === 0 ? 'No content indexed' : undefined,
+  };
+}
+
+// Check if KB is ready for attachment and has content
+export async function isKBReady(kbId: string): Promise<{ ready: boolean; reason?: string; hasContent?: boolean }> {
+  const kb = await getKnowledgeBase(kbId);
+  const indexJob = kb.knowledge_base.last_indexing_job;
+  const status = indexJob?.status;
+
+  // Still running or pending
+  if (status === 'INDEX_JOB_STATUS_RUNNING' || status === 'INDEX_JOB_STATUS_PENDING') {
+    return { ready: false, reason: 'KB indexing still in progress', hasContent: false };
+  }
+
+  // Failed
+  if (status === 'INDEX_JOB_STATUS_FAILED') {
+    return { ready: false, reason: 'KB indexing failed', hasContent: false };
+  }
+
+  // No indexing job yet
+  if (!status) {
+    return { ready: false, reason: 'KB has never been indexed', hasContent: false };
+  }
+
+  // COMPLETED or NO_CHANGES - check actual content
+  if (status === 'INDEX_JOB_STATUS_COMPLETED' || status === 'INDEX_JOB_STATUS_NO_CHANGES') {
+    // Check if we actually got indexed content
+    const dsJobs = indexJob?.data_source_jobs || [];
+    const totalIndexed = dsJobs.reduce((sum, job) => {
+      return sum + parseInt(job.indexed_item_count || '0', 10);
+    }, 0);
+    const hasContent = totalIndexed >= CRAWLER_CONFIG.MIN_USEFUL_ITEMS;
+
+    return { ready: true, hasContent };
+  }
+
+  return { ready: false, reason: `Unknown indexing status: ${status}`, hasContent: false };
+}
+
 export async function attachKnowledgeBaseToAgent(
   agentId: string,
-  kbId: string
+  kbId: string,
+  maxRetries = 3,
+  initialDelayMs = 2000
 ): Promise<void> {
-  const response = await fetch(
-    `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/knowledge_bases`,
-    {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({
-        knowledge_base_uuids: [kbId],
-      }),
-    }
-  );
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(`Failed to attach KB to agent: ${JSON.stringify(error)}`);
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // Add delay before retry attempts (not on first attempt)
+    if (attempt > 0) {
+      const delay = initialDelayMs * Math.pow(2, attempt - 1);
+      console.log(`Retrying KB attachment in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+
+    // Use path-based POST endpoint for KB attachment (verified via curl testing)
+    // POST /gen-ai/agents/{agent_uuid}/knowledge_bases/{kb_uuid}
+    console.log(`Attach KB API call (attempt ${attempt + 1}/${maxRetries}): POST /gen-ai/agents/${agentId}/knowledge_bases/${kbId}`);
+
+    try {
+      const response = await fetch(
+        `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/knowledge_bases/${kbId}`,
+        {
+          method: 'POST',
+          headers: getHeaders(),
+        }
+      );
+
+      const responseText = await response.text();
+      console.log(`Attach KB API response status: ${response.status}`);
+
+      if (!response.ok) {
+        console.log(`Attach KB API error:`, responseText);
+        lastError = new Error(`Failed to attach KB to agent: ${responseText}`);
+        continue; // Retry
+      }
+
+      // Path-based endpoint returns knowledge_bases array in response - verify inline
+      try {
+        const responseData = JSON.parse(responseText);
+        const attachedKBs = responseData.agent?.knowledge_bases || [];
+        const kbAttached = attachedKBs.some((kb: { uuid: string }) => kb.uuid === kbId);
+
+        if (kbAttached) {
+          console.log(`KB ${kbId} attachment verified - found in POST response`);
+          return; // Success!
+        }
+      } catch {
+        // If parsing fails, fall through to GET verification
+      }
+
+      // Fallback: Verify attachment by fetching the agent
+      console.log(`Verifying KB attachment via GET...`);
+      const agentResponse = await getAgent(agentId);
+      const attachedKBIds = getKnowledgeBaseIds(agentResponse.agent);
+      const kbAttached = attachedKBIds.includes(kbId);
+
+      if (!kbAttached) {
+        console.warn(`KB attachment verification failed (attempt ${attempt + 1}) - KB ${kbId} not found`);
+        console.warn(`Agent has KBs:`, attachedKBIds.length > 0 ? attachedKBIds.join(', ') : 'none');
+        lastError = new Error(`KB attachment failed - KB ${kbId} not attached after verification`);
+        continue; // Retry
+      }
+
+      console.log(`KB ${kbId} attachment verified via GET - found in agent's KB list`);
+      return; // Success!
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        console.warn(`Could not parse attach response as JSON (attempt ${attempt + 1})`);
+        lastError = new Error('Failed to parse attach response');
+        continue; // Retry
+      }
+      lastError = err as Error;
+      continue; // Retry
+    }
   }
+
+  // All retries exhausted
+  throw lastError || new Error('KB attachment failed after all retries');
 }
 
 // ============================================
@@ -453,15 +694,16 @@ export async function listAgents(): Promise<GetAgentResponse['agent'][]> {
   return data.agents || [];
 }
 
-// Find an existing agent by domain name pattern
+// Find an existing agent by exact domain match
 export async function findAgentByDomain(
   domain: string
 ): Promise<GetAgentResponse['agent'] | null> {
   const agents = await listAgents();
-  // Look for agent with name pattern "Sammy - {domain}"
+  // Match agent with exact name "Sammy - {domain}"
+  const expectedName = `Sammy - ${domain}`.toLowerCase();
   return (
     agents.find((agent) =>
-      agent.name.toLowerCase().includes(domain.toLowerCase())
+      agent.name.toLowerCase() === expectedName
     ) || null
   );
 }
@@ -476,7 +718,11 @@ export async function getAgent(agentId: string): Promise<GetAgentResponse> {
     throw new Error(`Failed to get Agent: ${JSON.stringify(error)}`);
   }
 
-  return response.json();
+  const data = await response.json();
+  // Debug: Log KB-related fields
+  const kbIds = getKnowledgeBaseIds(data.agent);
+  console.log(`getAgent ${agentId} - KB count: ${kbIds.length}, IDs: ${kbIds.join(', ') || 'none'}`);
+  return data;
 }
 
 export async function deleteAgent(agentId: string): Promise<void> {
@@ -578,6 +824,86 @@ export async function createAccessKey(
   }
 
   return response.json();
+}
+
+// ============================================
+// Content Quality Testing
+// ============================================
+
+export interface ContentQualityResult {
+  isLowQuality: boolean;
+  reason?: string;
+  foundKeywords?: string[];
+}
+
+/**
+ * Test agent content quality by sending a test question
+ * Returns true if content appears to be auth/login pages
+ */
+export async function testContentQuality(
+  agentId: string,
+  endpoint: string | undefined
+): Promise<ContentQualityResult> {
+  if (!endpoint) {
+    return { isLowQuality: false, reason: 'No endpoint available' };
+  }
+
+  try {
+    // Create temporary access key
+    const keyResponse = await createAccessKey(agentId);
+    const accessKey =
+      keyResponse.api_key_info?.secret_key ||
+      keyResponse.access_key?.key ||
+      '';
+
+    if (!accessKey) {
+      return { isLowQuality: false, reason: 'Could not create access key' };
+    }
+
+    // Query agent with test question
+    const client = new OpenAI({
+      baseURL: `${endpoint}/api/v1`,
+      apiKey: accessKey,
+    });
+
+    const response = await client.chat.completions.create({
+      model: 'n/a',
+      messages: [
+        { role: 'user', content: CONTENT_QUALITY_CONFIG.TEST_QUESTION },
+      ],
+      stream: false,
+    });
+
+    const content =
+      response.choices[0]?.message?.content?.toLowerCase() || '';
+
+    // Check for auth keywords
+    const foundKeywords = CONTENT_QUALITY_CONFIG.AUTH_KEYWORDS.filter((kw) =>
+      content.includes(kw)
+    );
+
+    if (foundKeywords.length >= CONTENT_QUALITY_CONFIG.MIN_AUTH_KEYWORD_MATCHES) {
+      return {
+        isLowQuality: true,
+        reason: `Response contains auth keywords: ${foundKeywords.join(', ')}`,
+        foundKeywords,
+      };
+    }
+
+    // Check for very short/generic responses
+    if (content.length < CONTENT_QUALITY_CONFIG.MIN_RESPONSE_LENGTH) {
+      return {
+        isLowQuality: true,
+        reason: 'Response too short - likely no useful content',
+      };
+    }
+
+    return { isLowQuality: false };
+  } catch (error) {
+    console.error('[testContentQuality] Error:', error);
+    // Don't fail the quality check on errors - assume content is OK
+    return { isLowQuality: false, reason: 'Test failed - assuming OK' };
+  }
 }
 
 // ============================================
@@ -726,6 +1052,9 @@ export interface RepairResult {
   attached: string[];
   alreadyAttached: string[];
   notFound: string[];
+  skipped: string[]; // KBs skipped due to region/project mismatch or other issues
+  enhanced: string[]; // KBs enhanced via Firecrawl fallback
+  created: string[]; // KBs created from scratch when none existed
 }
 
 /**
@@ -751,7 +1080,8 @@ export async function repairAgentKBs(agentId: string): Promise<RepairResult> {
     `${domainSlug}-structured`,
   ];
 
-  console.log(`Repairing KBs for agent ${agent.name}, looking for: ${expectedKBNames.join(', ')}`);
+  console.log(`Repairing KBs for agent ${agent.name} (region: ${agent.region}, project: ${agent.project_id})`);
+  console.log(`Looking for: ${expectedKBNames.join(', ')}`);
 
   // Get existing attached KBs
   const existingKBIds = new Set(getKnowledgeBaseIds(agent));
@@ -762,6 +1092,9 @@ export async function repairAgentKBs(agentId: string): Promise<RepairResult> {
     attached: [],
     alreadyAttached: [],
     notFound: [],
+    skipped: [],
+    enhanced: [], // KBs that were enhanced via Firecrawl
+    created: [], // KBs created from scratch
   };
 
   for (const expectedName of expectedKBNames) {
@@ -774,10 +1107,132 @@ export async function repairAgentKBs(agentId: string): Promise<RepairResult> {
       results.alreadyAttached.push(kb.name);
       continue;
     }
+
+    // Validate region match
+    if (kb.region !== agent.region) {
+      console.warn(`KB ${kb.name} region (${kb.region}) doesn't match agent region (${agent.region}), skipping`);
+      results.skipped.push(`${kb.name} (region mismatch)`);
+      continue;
+    }
+
+    // Validate project match
+    if (kb.project_id !== agent.project_id) {
+      console.warn(`KB ${kb.name} project (${kb.project_id}) doesn't match agent project (${agent.project_id}), skipping`);
+      results.skipped.push(`${kb.name} (project mismatch)`);
+      continue;
+    }
+
+    // Log KB details for debugging
+    console.log(`KB ${kb.name} - region: ${kb.region}, project: ${kb.project_id}, indexed: ${kb.last_indexing_job?.status}`);
+
+    // Check if KB has content - if not, try Firecrawl fallback
+    const readiness = await isKBReady(kb.uuid);
+    let needsFirecrawl = false;
+    let firecrawlReason = '';
+
+    if (!readiness.hasContent) {
+      needsFirecrawl = true;
+      firecrawlReason = 'no content indexed';
+    } else if (FIRECRAWL_CONFIG.IS_ENABLED) {
+      // KB has content - check quality
+      console.log(`[Repair] Checking content quality for KB ${kb.name}...`);
+      const qualityCheck = await testContentQuality(agentId, agent.endpoint);
+
+      if (qualityCheck.isLowQuality) {
+        needsFirecrawl = true;
+        firecrawlReason = qualityCheck.reason || 'low quality content detected';
+        console.log(`[Repair] Low quality detected: ${firecrawlReason}`);
+      } else {
+        console.log(`[Repair] Content quality OK for KB ${kb.name}`);
+      }
+    }
+
+    if (needsFirecrawl && FIRECRAWL_CONFIG.IS_ENABLED) {
+      // Check if Firecrawl already ran (file datasource exists)
+      const hasFileDataSource = kb.datasources?.some(
+        (ds) => ds.file_upload_data_source
+      );
+
+      if (!hasFileDataSource) {
+        console.log(`[Repair] KB ${kb.name} needs enhancement (${firecrawlReason}), triggering Firecrawl...`);
+        try {
+          const url = `https://${domain}`;
+          const scrapeResult = await scrapeUrl(url);
+
+          if (scrapeResult.success && scrapeResult.markdown) {
+            console.log(`[Repair] Firecrawl scraped ${scrapeResult.markdown.length} chars from ${url}`);
+
+            // Upload scraped content to KB
+            const filename = `${domainSlug}-scraped.md`;
+            await uploadContentToKB(kb.uuid, scrapeResult.markdown, filename);
+            console.log(`[Repair] Uploaded Firecrawl content to KB ${kb.uuid}`);
+
+            // Re-index the KB
+            await startIndexingJob(kb.uuid);
+            console.log(`[Repair] Re-indexing KB ${kb.uuid}...`);
+
+            // Wait a bit for indexing to start processing
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            results.enhanced.push(kb.name);
+          } else {
+            console.warn(`[Repair] Firecrawl failed for ${url}: ${scrapeResult.error}`);
+          }
+        } catch (err) {
+          console.error(`[Repair] Firecrawl error:`, err);
+        }
+      } else {
+        console.log(`[Repair] KB ${kb.name} already has file datasource, skipping Firecrawl`);
+      }
+    }
+
     // Attach the KB to the agent
     console.log(`Attaching KB ${kb.name} (${kb.uuid}) to agent ${agentId}`);
-    await attachKnowledgeBaseToAgent(agentId, kb.uuid);
-    results.attached.push(kb.name);
+    try {
+      await attachKnowledgeBaseToAgent(agentId, kb.uuid);
+      results.attached.push(kb.name);
+    } catch (attachErr) {
+      console.warn(`[Repair] KB attachment failed for ${kb.name}:`, attachErr);
+      results.skipped.push(`${kb.name} (attachment failed)`);
+    }
+  }
+
+  // If no KBs were attached and crawl KB is missing, create it from scratch
+  const crawlKBName = `${domainSlug}-crawl`;
+  if (
+    results.attached.length === 0 &&
+    results.alreadyAttached.length === 0 &&
+    results.notFound.includes(crawlKBName)
+  ) {
+    console.log(`[Repair] No existing KBs found, creating new crawl KB for ${domain}...`);
+
+    try {
+      // Create KB with web crawler
+      const newKB = await createKnowledgeBaseSmartCrawl({
+        name: crawlKBName,
+        seedUrls: [`https://${domain}`],
+      });
+      console.log(`[Repair] Created KB ${crawlKBName} (${newKB.knowledge_base.uuid})`);
+
+      // Wait for database provisioning
+      await waitForDatabaseReady(newKB.knowledge_base.uuid);
+      console.log(`[Repair] Database ready for ${crawlKBName}`);
+
+      // Start indexing
+      await startIndexingJob(newKB.knowledge_base.uuid);
+      console.log(`[Repair] Started indexing for ${crawlKBName}`);
+
+      // Attach to agent
+      await attachKnowledgeBaseToAgent(agentId, newKB.knowledge_base.uuid);
+      console.log(`[Repair] Attached ${crawlKBName} to agent`);
+
+      // Update results
+      results.created!.push(crawlKBName);
+      results.notFound = results.notFound.filter((n) => n !== crawlKBName);
+    } catch (err) {
+      console.error(`[Repair] Failed to create KB for ${domain}:`, err);
+      results.skipped.push(`${crawlKBName} (creation failed: ${err instanceof Error ? err.message : 'unknown'})`);
+    }
   }
 
   console.log('Repair results:', results);

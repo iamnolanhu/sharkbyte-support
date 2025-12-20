@@ -73,11 +73,8 @@ export const TIMING = {
 
 // Web Crawler Configuration
 export const CRAWLER_CONFIG = {
-  // HTML tags to exclude from crawling
+  // HTML tags to exclude from crawling (keeping nav/header/footer for better link coverage)
   EXCLUDE_TAGS: [
-    'nav',
-    'footer',
-    'header',
     'aside',
     'script',
     'style',
@@ -87,4 +84,48 @@ export const CRAWLER_CONFIG = {
   ],
   // Whether to embed media files
   EMBED_MEDIA: false,
+  // Include links from header/footer/navigation elements
+  INCLUDE_NAVIGATION_LINKS: true,
+  // Minimum indexed items to consider KB has useful content
+  MIN_USEFUL_ITEMS: 1,
+} as const;
+
+// Firecrawl Configuration (fallback for SPAs/JS sites)
+export const FIRECRAWL_CONFIG = {
+  API_BASE: 'https://api.firecrawl.dev/v1',
+  // API Key (optional - Firecrawl fallback only used if key is set)
+  get API_KEY() {
+    return process.env.FIRECRAWL_API_KEY || '';
+  },
+  get IS_ENABLED() {
+    return !!process.env.FIRECRAWL_API_KEY;
+  },
+} as const;
+
+// Content Quality Detection Configuration
+// Used to detect when indexed content is login/auth pages instead of useful content
+export const CONTENT_QUALITY_CONFIG = {
+  // Keywords that indicate low-quality auth/login page content
+  AUTH_KEYWORDS: [
+    'sign in',
+    'log in',
+    'login',
+    'password',
+    'authenticate',
+    'create account',
+    'register',
+    'forgot password',
+    'reset password',
+    'access denied',
+    'unauthorized',
+    'permission denied',
+    'session expired',
+    'please authenticate',
+  ],
+  // Minimum response length to consider content valid
+  MIN_RESPONSE_LENGTH: 50,
+  // Minimum auth keyword matches to consider content low quality
+  MIN_AUTH_KEYWORD_MATCHES: 2,
+  // Test question to ask the agent
+  TEST_QUESTION: 'What is this website about?',
 } as const;

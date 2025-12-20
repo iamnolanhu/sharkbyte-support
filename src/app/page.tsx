@@ -22,7 +22,7 @@ interface AgentData {
   isExisting: boolean;
 }
 
-const MAX_POLL_ATTEMPTS = 60; // 3 minutes max (60 × 3 seconds)
+const MAX_POLL_ATTEMPTS = 10; // 30 seconds max (10 × 3 seconds) before navigating to chat
 
 export default function Home() {
   const router = useRouter();
@@ -30,33 +30,50 @@ export default function Home() {
   const [agentData, setAgentData] = useState<AgentData | null>(null);
   const [error, setError] = useState<string>('');
   const [pollCount, setPollCount] = useState(0);
+  const [statusMessage, setStatusMessage] = useState<string>(''); // Dynamic status from API
 
   // Poll for agent status when indexing (with timeout)
   useEffect(() => {
     if (step !== 'indexing' || !agentData) return;
 
     const pollStatus = async () => {
-      // Check for timeout
-      setPollCount((prev) => {
-        const newCount = prev + 1;
-        if (newCount >= MAX_POLL_ATTEMPTS) {
-          setStep('error');
-          setError(
-            'Indexing is taking longer than expected. The process will continue in the background - please try again in a few minutes.'
-          );
-        }
-        return newCount;
-      });
+      // Check for timeout - navigate to chat anyway after max attempts
+      const currentCount = pollCount + 1;
+      setPollCount(currentCount);
+
+      if (currentCount >= MAX_POLL_ATTEMPTS) {
+        // Store in localStorage and navigate to agent dashboard with indexing flag
+        localStorage.setItem(
+          `sharkbyte-agent-${agentData.agentId}`,
+          JSON.stringify({
+            id: agentData.agentId,
+            name: agentData.agentName,
+            kbId: agentData.kbId,
+            url: agentData.url,
+            endpoint: agentData.endpoint,
+            accessKey: agentData.accessKey,
+            createdAt: new Date().toISOString(),
+          })
+        );
+        // Navigate to agent dashboard with indexing flag
+        router.push(`/agents/${agentData.agentId}?indexing=true&kbId=${agentData.kbId}`);
+        return;
+      }
 
       try {
         const res = await fetch(
-          `/api/agent-status?agentId=${agentData.agentId}&kbId=${agentData.kbId}`
+          `/api/agent-status?agentId=${agentData.agentId}&kbId=${agentData.kbId}&url=${encodeURIComponent(agentData.url || '')}`
         );
         const data = await res.json();
 
+        // Update status message if provided
+        if (data.message) {
+          setStatusMessage(data.message);
+        }
+
         if (data.status === 'ready') {
           setStep('ready');
-          // Store in localStorage and redirect
+          // Store in localStorage and redirect to agent dashboard
           localStorage.setItem(
             `sharkbyte-agent-${agentData.agentId}`,
             JSON.stringify({
@@ -69,7 +86,7 @@ export default function Home() {
               createdAt: new Date().toISOString(),
             })
           );
-          router.push(`/chat/${agentData.agentId}`);
+          router.push(`/agents/${agentData.agentId}`);
         } else if (data.status === 'error') {
           setStep('error');
           setError(data.error || 'Failed to create agent');
@@ -84,6 +101,7 @@ export default function Home() {
   }, [step, agentData, router]);
 
   const handleSubmit = async (url: string) => {
+    console.log('[handleSubmit] Starting with URL:', url);
     setStep('creating');
     setError('');
     setPollCount(0);
@@ -96,6 +114,7 @@ export default function Home() {
       });
 
       const data = await res.json();
+      console.log('[handleSubmit] API response:', data);
 
       if (!data.success) {
         throw new Error(data.error || 'Failed to create agent');
@@ -110,11 +129,13 @@ export default function Home() {
         url: data.url,
         isExisting: data.isExisting,
       };
+      console.log('[handleSubmit] Setting agentData:', newAgentData);
 
       setAgentData(newAgentData);
 
       // Check if agent is already ready (existing agent) or needs indexing
       if (data.status === 'ready' || data.isExisting) {
+        console.log('[handleSubmit] Agent ready, redirecting to dashboard');
         // Existing agent - ready immediately
         setStep('ready');
 
@@ -132,13 +153,15 @@ export default function Home() {
           })
         );
 
-        // Redirect to chat
-        router.push(`/chat/${data.agentId}`);
+        // Redirect to agent dashboard
+        router.push(`/agents/${data.agentId}`);
       } else {
+        console.log('[handleSubmit] New agent, setting step to indexing');
         // New agent - indexing in progress, start polling
         setStep('indexing');
       }
     } catch (err) {
+      console.error('[handleSubmit] Error:', err);
       setStep('error');
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
     }
@@ -161,7 +184,7 @@ export default function Home() {
     {
       id: 'indexing',
       label: 'Indexing Website',
-      description: 'Crawling and processing pages',
+      description: statusMessage || 'Crawling and processing pages',
       status:
         step === 'indexing'
           ? 'loading'

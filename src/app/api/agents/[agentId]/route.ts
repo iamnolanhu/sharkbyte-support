@@ -46,7 +46,8 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
     // Fetch all KB details
     const knowledgeBases: KnowledgeBaseInfo[] = [];
-    for (const kbId of agent.knowledge_base_ids || []) {
+    const agentKBIds = getKnowledgeBaseIds(agent);
+    for (const kbId of agentKBIds) {
       try {
         const kbResponse = await getKnowledgeBase(kbId);
         const kb = kbResponse.knowledge_base;

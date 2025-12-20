@@ -13,6 +13,7 @@ import {
   getDefaultInstruction,
   getKnowledgeBaseIds,
   getOrCreateKnowledgeBase,
+  attachKnowledgeBaseToAgent,
 } from '@/lib/digitalocean';
 import type { CreateAgentRequest, CreateAgentApiResponse } from '@/types';
 
@@ -116,7 +117,24 @@ export async function POST(request: NextRequest) {
     // Step 5: Start indexing job on crawl KB
     console.log(`Starting indexing job on crawl KB...`);
     await startIndexingJob(crawlKBId);
-    console.log(`Indexing started - returning early for frontend polling`);
+    console.log(`Indexing started`);
+
+    // Step 6: Wait for agent to initialize before attempting KB attachment
+    // DO API may need time before agent accepts KB attachments
+    console.log(`Waiting 3 seconds for agent to initialize...`);
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Step 7: Attempt to attach KB to agent (with built-in retries)
+    // Note: This may still fail. Auto-repair will handle it later if needed.
+    console.log(`Attempting to attach KB ${crawlKBId} to agent ${agent.uuid}...`);
+    try {
+      await attachKnowledgeBaseToAgent(agent.uuid, crawlKBId);
+      console.log(`KB attached successfully`);
+    } catch (attachError) {
+      // Log but don't fail - auto-repair will handle it
+      console.warn(`KB attachment failed after retries (auto-repair will handle):`,
+        attachError instanceof Error ? attachError.message : attachError);
+    }
 
     // Return with KB ID
     const response: CreateAgentApiResponse = {

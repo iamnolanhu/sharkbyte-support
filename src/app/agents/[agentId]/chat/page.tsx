@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, ExternalLink, Trash2, Settings } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Trash2, Settings, X, Loader2 } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { AgentHistory } from '@/components/agent-history';
 import { ChatMessage, ChatMessageSkeleton } from '@/components/chat-message';
@@ -16,13 +16,19 @@ import type { ChatMessage as ChatMessageType, StoredAgent } from '@/types';
 export default function ChatPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const agentId = params.agentId as string;
+
+  // Check if we arrived here while indexing was still in progress
+  const indexingParam = searchParams.get('indexing') === 'true';
+  const kbIdParam = searchParams.get('kbId');
 
   const [agent, setAgent] = useState<StoredAgent | null>(null);
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isFetchingAgent, setIsFetchingAgent] = useState(true);
   const [streamingContent, setStreamingContent] = useState('');
+  const [showIndexingBanner, setShowIndexingBanner] = useState(indexingParam);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Always fetch fresh agent credentials from API
@@ -78,6 +84,30 @@ export default function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingContent]);
+
+  // Poll for indexing status to auto-dismiss banner when ready
+  useEffect(() => {
+    if (!showIndexingBanner || !kbIdParam) return;
+
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(
+          `/api/agent-status?agentId=${agentId}&kbId=${kbIdParam}`
+        );
+        const data = await res.json();
+        if (data.status === 'ready') {
+          setShowIndexingBanner(false);
+        }
+      } catch (err) {
+        console.error('Status check error:', err);
+      }
+    };
+
+    // Check immediately, then every 5 seconds
+    checkStatus();
+    const interval = setInterval(checkStatus, 5000);
+    return () => clearInterval(interval);
+  }, [showIndexingBanner, agentId, kbIdParam]);
 
   const sendMessage = async (content: string) => {
     if (!agent) return;
@@ -219,6 +249,33 @@ export default function ChatPage() {
           </div>
         </div>
       </header>
+
+      {/* Indexing Status Banner */}
+      {showIndexingBanner && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          className="bg-[var(--do-blue)]/10 border-b border-[var(--do-blue)]/20 px-4 py-3"
+        >
+          <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-4 h-4 text-[var(--do-blue)] animate-spin" />
+              <span className="text-sm text-foreground">
+                Sammy is still learning about this website. Responses may improve shortly.
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowIndexingBanner(false)}
+              className="h-6 w-6 rounded-full hover:bg-[var(--do-blue)]/20"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+        </motion.div>
+      )}
 
       {/* Messages */}
       <main className="flex-1 overflow-y-auto">
