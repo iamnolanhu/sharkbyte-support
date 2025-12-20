@@ -27,8 +27,16 @@
     return;
   }
 
-  // Base URL for the widget
-  var baseUrl = 'https://sharkbyte-support.vercel.app';
+  // Derive base URL from script src (future-proof for domain changes)
+  var scriptSrc = script.src;
+  var baseUrl = scriptSrc.substring(0, scriptSrc.lastIndexOf('/'));
+  // Handle case where widget.js is at root
+  if (baseUrl.endsWith('/widget.js')) {
+    baseUrl = baseUrl.replace('/widget.js', '');
+  }
+
+  // Track widget state
+  var isMaximized = false;
 
   // Create container
   var container = document.createElement('div');
@@ -68,21 +76,43 @@
 
   // Handle postMessage from widget
   window.addEventListener('message', function(event) {
-    // Verify origin
-    if (event.origin !== baseUrl) return;
+    // Verify origin - check if it matches our base URL
+    if (!event.origin || event.origin !== new URL(baseUrl).origin) return;
 
     var data = event.data;
     if (!data || !data.type) return;
 
     if (data.type === 'sharkbyte:open') {
+      isMaximized = false;
+      container.style.position = 'fixed';
+      container.style.inset = '';
+      container.style.bottom = '16px';
+      container.style[config.position === 'bottom-right' ? 'right' : 'left'] = '16px';
       container.style.width = (data.payload.width || 380) + 'px';
       container.style.height = (data.payload.height || 520) + 'px';
+      iframe.style.borderRadius = '16px';
     } else if (data.type === 'sharkbyte:close') {
+      isMaximized = false;
+      container.style.position = 'fixed';
+      container.style.inset = '';
+      container.style.bottom = '16px';
+      container.style[config.position === 'bottom-right' ? 'right' : 'left'] = '16px';
       container.style.width = (data.payload.width || 70) + 'px';
       container.style.height = (data.payload.height || 70) + 'px';
+      iframe.style.borderRadius = '16px';
+    } else if (data.type === 'sharkbyte:maximize') {
+      isMaximized = true;
+      container.style.position = 'fixed';
+      container.style.inset = '0';
+      container.style.bottom = '';
+      container.style.right = '';
+      container.style.left = '';
+      container.style.width = '100%';
+      container.style.height = '100%';
+      iframe.style.borderRadius = '0';
     } else if (data.type === 'sharkbyte:resize') {
-      if (data.payload.width) container.style.width = data.payload.width;
-      if (data.payload.height) container.style.height = data.payload.height;
+      if (data.payload.width) container.style.width = data.payload.width + 'px';
+      if (data.payload.height) container.style.height = data.payload.height + 'px';
     }
   });
 

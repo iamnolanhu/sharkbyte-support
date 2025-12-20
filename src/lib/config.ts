@@ -43,11 +43,46 @@ export const DO_CONFIG = {
 } as const;
 
 // Demo Agent Configuration
+// Dynamically detects deployment domain for self-healing demo agent
+function getDemoAgentDomain(): string {
+  // Check for explicit app URL first
+  if (process.env.APP_URL) {
+    try {
+      return new URL(process.env.APP_URL).host;
+    } catch {
+      // Invalid URL, continue to other options
+    }
+  }
+
+  // Vercel deployment URLs
+  const vercelUrl = process.env.VERCEL_URL || process.env.NEXT_PUBLIC_VERCEL_URL;
+  if (vercelUrl) {
+    // VERCEL_URL doesn't include protocol
+    return vercelUrl.replace(/^https?:\/\//, '');
+  }
+
+  // Development fallback
+  return 'localhost:3000';
+}
+
+function getDemoAgentUrl(): string {
+  const domain = getDemoAgentDomain();
+  // Use https for production, http for localhost
+  const protocol = domain.startsWith('localhost') ? 'http' : 'https';
+  return `${protocol}://${domain}`;
+}
+
 export const DEMO_AGENT_CONFIG = {
-  URL: 'https://sharkbyte-demo.vercel.app',
-  NAME: 'Sammy - sharkbyte-demo.vercel.app',
-  DOMAIN: 'sharkbyte-demo.vercel.app',
-} as const;
+  get URL() {
+    return getDemoAgentUrl();
+  },
+  get NAME() {
+    return `Sammy - ${getDemoAgentDomain()}`;
+  },
+  get DOMAIN() {
+    return getDemoAgentDomain();
+  },
+};
 
 // Knowledge Base Types
 export const KB_TYPES = {

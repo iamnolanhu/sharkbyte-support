@@ -1,6 +1,15 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import {
+  WIDGET_AVATAR,
+  THEME_COLORS,
+  WIDGET_DIMENSIONS,
+  FOOTER_LINKS,
+  FOOTER_TEXT,
+  OCEAN_BUBBLE_KEYFRAMES,
+  getAssetUrl,
+} from './widget-shared';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -19,48 +28,6 @@ interface EmbedChatWidgetProps {
 
 type Theme = 'light' | 'dark' | 'ocean';
 
-const themes = {
-  light: {
-    bg: '#ffffff',
-    bgGradient: '#ffffff',
-    bgSecondary: '#f5f5f5',
-    bgBubble: '#ffffff',
-    text: '#333333',
-    textMuted: '#666666',
-    border: '#e5e5e5',
-    inputBg: '#f9f9f9',
-    inputBorder: '#dddddd',
-    accent: '#0080FF',
-    loadingDot: '#999999',
-  },
-  dark: {
-    bg: '#1a1a1a',
-    bgGradient: '#1a1a1a',
-    bgSecondary: '#262626',
-    bgBubble: '#333333',
-    text: '#f2f2f2',
-    textMuted: '#999999',
-    border: '#333333',
-    inputBg: '#262626',
-    inputBorder: '#444444',
-    accent: '#0080FF',
-    loadingDot: '#666666',
-  },
-  ocean: {
-    bg: '#0a1628',
-    bgGradient: 'linear-gradient(180deg, #0a1628 0%, #1a365d 100%)',
-    bgSecondary: '#1e3a5f',
-    bgBubble: '#1e3a5f',
-    text: '#e0f2fe',
-    textMuted: '#7dd3fc',
-    border: 'rgba(6, 182, 212, 0.2)',
-    inputBg: '#0a1628',
-    inputBorder: 'rgba(6, 182, 212, 0.3)',
-    accent: '#0891b2',
-    loadingDot: '#22d3ee',
-  },
-};
-
 export function EmbedChatWidget({
   endpoint,
   accessKey,
@@ -68,23 +35,29 @@ export function EmbedChatWidget({
   agentName = 'Sammy',
   primaryColor = '#0080FF',
   position = 'bottom-right',
-  welcomeMessage = "Hi! How can I help you today?",
+  welcomeMessage = "Hi! I'm Sammy, your AI assistant. How can I help you today?",
 }: EmbedChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [theme, setTheme] = useState<Theme>('light');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Get base URL on mount
+  useEffect(() => {
+    setBaseUrl(window.location.origin);
+  }, []);
 
   // Detect system preference on mount
   useEffect(() => {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     setTheme(prefersDark ? 'dark' : 'light');
 
-    // Listen for system preference changes
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const handleChange = (e: MediaQueryListEvent) => {
       if (theme !== 'ocean') {
@@ -93,19 +66,22 @@ export function EmbedChatWidget({
     };
     mediaQuery.addEventListener('change', handleChange);
     return () => mediaQuery.removeEventListener('change', handleChange);
-  }, []);
+  }, [theme]);
 
   // Notify parent window of state changes
   useEffect(() => {
+    const dimensions = isMaximized
+      ? { width: window.innerWidth, height: window.innerHeight }
+      : isOpen
+      ? WIDGET_DIMENSIONS.expanded
+      : WIDGET_DIMENSIONS.collapsed;
+
     const message = {
-      type: isOpen ? 'sharkbyte:open' : 'sharkbyte:close',
-      payload: {
-        width: isOpen ? 380 : 70,
-        height: isOpen ? 520 : 70,
-      },
+      type: isMaximized ? 'sharkbyte:maximize' : isOpen ? 'sharkbyte:open' : 'sharkbyte:close',
+      payload: dimensions,
     };
     window.parent.postMessage(message, '*');
-  }, [isOpen]);
+  }, [isOpen, isMaximized]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -135,8 +111,9 @@ export function EmbedChatWidget({
     setStreamingContent('');
 
     try {
-      // Use absolute URL since widget runs in iframe on external sites
-      const response = await fetch(`https://sharkbyte-support.vercel.app/api/widget/${agentId}`, {
+      // Use dynamic base URL
+      const apiUrl = `${baseUrl}/api/widget/${agentId}`;
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -198,8 +175,9 @@ export function EmbedChatWidget({
     }
   };
 
-  const colors = themes[theme];
+  const colors = THEME_COLORS[theme];
   const accentColor = theme === 'ocean' ? colors.accent : primaryColor;
+  const avatarUrl = getAssetUrl(WIDGET_AVATAR, baseUrl);
 
   // Inline SVG icons
   const CloseIcon = () => (
@@ -226,6 +204,24 @@ export function EmbedChatWidget({
       <line x1="18" y1="12" x2="22" y2="12" />
       <line x1="4.93" y1="19.07" x2="7.76" y2="16.24" />
       <line x1="16.24" y1="7.76" x2="19.07" y2="4.93" />
+    </svg>
+  );
+
+  const MaximizeIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="15 3 21 3 21 9" />
+      <polyline points="9 21 3 21 3 15" />
+      <line x1="21" y1="3" x2="14" y2="10" />
+      <line x1="3" y1="21" x2="10" y2="14" />
+    </svg>
+  );
+
+  const MinimizeIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="4 14 10 14 10 20" />
+      <polyline points="20 10 14 10 14 4" />
+      <line x1="14" y1="10" x2="21" y2="3" />
+      <line x1="3" y1="21" x2="10" y2="14" />
     </svg>
   );
 
@@ -267,6 +263,10 @@ export function EmbedChatWidget({
     ? { right: '16px' }
     : { left: '16px' };
 
+  const containerStyle = isMaximized
+    ? { position: 'fixed' as const, inset: '0', width: '100%', height: '100%' }
+    : { position: 'fixed' as const, bottom: '16px', ...positionStyle };
+
   return (
     <>
       <style>{`
@@ -281,13 +281,20 @@ export function EmbedChatWidget({
         .bounce-1 { animation: bounce 0.6s infinite; animation-delay: 0ms; }
         .bounce-2 { animation: bounce 0.6s infinite; animation-delay: 150ms; }
         .bounce-3 { animation: bounce 0.6s infinite; animation-delay: 300ms; }
+        ${OCEAN_BUBBLE_KEYFRAMES}
+        .ocean-bubble {
+          animation: bubble-rise 8s infinite ease-out;
+        }
+        .ocean-bubble:nth-child(2) { animation-delay: 1.5s; animation-duration: 10s; }
+        .ocean-bubble:nth-child(3) { animation-delay: 3s; animation-duration: 9s; }
+        .ocean-bubble:nth-child(4) { animation-delay: 4.5s; animation-duration: 11s; }
+        .ocean-bubble:nth-child(5) { animation-delay: 6s; animation-duration: 10s; }
+        .ocean-bubble:nth-child(6) { animation-delay: 7.5s; animation-duration: 12s; }
       `}</style>
 
       <div
         style={{
-          position: 'fixed',
-          bottom: '16px',
-          ...positionStyle,
+          ...containerStyle,
           zIndex: 9999,
           fontFamily: 'system-ui, -apple-system, sans-serif',
         }}
@@ -295,15 +302,15 @@ export function EmbedChatWidget({
         {isOpen ? (
           <div
             style={{
-              width: '360px',
-              height: '500px',
+              width: isMaximized ? '100%' : '360px',
+              height: isMaximized ? '100%' : '500px',
               background: colors.bgGradient,
-              borderRadius: '16px',
-              boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+              borderRadius: isMaximized ? '0' : '16px',
+              boxShadow: isMaximized ? 'none' : '0 10px 40px rgba(0,0,0,0.2)',
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
-              border: `1px solid ${colors.border}`,
+              border: isMaximized ? 'none' : `1px solid ${colors.border}`,
               transition: 'all 0.3s ease',
             }}
           >
@@ -329,7 +336,7 @@ export function EmbedChatWidget({
                 }}
               >
                 <img
-                  src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                  src={avatarUrl}
                   alt={agentName}
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
@@ -359,7 +366,30 @@ export function EmbedChatWidget({
                 <ThemeIcon />
               </button>
               <button
-                onClick={() => setIsOpen(false)}
+                onClick={() => setIsMaximized(!isMaximized)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  padding: '8px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)')}
+                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                title={isMaximized ? 'Minimize' : 'Maximize'}
+              >
+                {isMaximized ? <MinimizeIcon /> : <MaximizeIcon />}
+              </button>
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  setIsMaximized(false);
+                }}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -389,8 +419,30 @@ export function EmbedChatWidget({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '12px',
+                position: 'relative',
               }}
             >
+              {/* Ocean theme bubbles */}
+              {theme === 'ocean' && (
+                <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+                  {[...Array(6)].map((_, i) => (
+                    <div
+                      key={i}
+                      className="ocean-bubble"
+                      style={{
+                        position: 'absolute',
+                        width: 4 + (i % 3) * 2,
+                        height: 4 + (i % 3) * 2,
+                        left: `${15 + i * 15}%`,
+                        bottom: '-5%',
+                        borderRadius: '50%',
+                        background: 'radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2), rgba(0,175,206,0.1))',
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+
               {/* Welcome message */}
               {messages.length === 0 && !streamingContent && (
                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -406,7 +458,7 @@ export function EmbedChatWidget({
                     }}
                   >
                     <img
-                      src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                      src={avatarUrl}
                       alt={agentName}
                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
@@ -451,7 +503,7 @@ export function EmbedChatWidget({
                       }}
                     >
                       <img
-                        src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                        src={avatarUrl}
                         alt={agentName}
                         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                       />
@@ -492,7 +544,7 @@ export function EmbedChatWidget({
                     }}
                   >
                     <img
-                      src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                      src={avatarUrl}
                       alt={agentName}
                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
@@ -540,7 +592,7 @@ export function EmbedChatWidget({
                     }}
                   >
                     <img
-                      src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                      src={avatarUrl}
                       alt={agentName}
                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
@@ -627,14 +679,26 @@ export function EmbedChatWidget({
                   marginTop: '8px',
                 }}
               >
-                Powered by{' '}
+                {FOOTER_TEXT.poweredBy}{' '}
                 <a
-                  href="https://sharkbyte-support.vercel.app"
+                  href={FOOTER_LINKS.sharkbyte}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ color: colors.textMuted, textDecoration: 'none' }}
                 >
-                  SharkByte
+                  {FOOTER_TEXT.sharkbyte}
+                </a>
+                {FOOTER_TEXT.separator}
+                {FOOTER_TEXT.madeWith}
+                <span style={{ color: '#ef4444' }}>{FOOTER_TEXT.heart}</span>
+                {FOOTER_TEXT.by}
+                <a
+                  href={FOOTER_LINKS.author}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: colors.textMuted, textDecoration: 'none' }}
+                >
+                  {FOOTER_TEXT.author}
                 </a>
               </div>
             </div>
@@ -657,7 +721,7 @@ export function EmbedChatWidget({
             onMouseOut={(e) => (e.currentTarget.style.transform = 'scale(1)')}
           >
             <img
-              src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+              src={avatarUrl}
               alt={`Chat with ${agentName}`}
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
