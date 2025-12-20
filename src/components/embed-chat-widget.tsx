@@ -53,20 +53,12 @@ export function EmbedChatWidget({
     setBaseUrl(window.location.origin);
   }, []);
 
-  // Detect system preference on mount
+  // Detect system preference only on initial mount
+  // Don't listen for changes - let user's manual selection persist
   useEffect(() => {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     setTheme(prefersDark ? 'dark' : 'light');
-
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const handleChange = (e: MediaQueryListEvent) => {
-      if (theme !== 'ocean') {
-        setTheme(e.matches ? 'dark' : 'light');
-      }
-    };
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
-  }, [theme]);
+  }, []); // Empty dependency - run once on mount only
 
   // Notify parent window of state changes
   useEffect(() => {

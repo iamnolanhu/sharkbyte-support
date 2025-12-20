@@ -1,7 +1,8 @@
 /**
  * Demo Agent Auto-Creation
  *
- * Ensures the demo agent for sharkbyte-demo.vercel.app exists on startup.
+ * Ensures a demo agent exists for the requesting domain.
+ * Uses request-based domain detection for automatic multi-domain support.
  */
 
 import {
@@ -14,9 +15,9 @@ import {
   getDefaultInstruction,
   generateCrawlKBName,
 } from './digitalocean';
-import { DEMO_AGENT_CONFIG } from './config';
 
-let demoAgentPromise: Promise<DemoAgentResult> | null = null;
+// Map of domain -> creation promise (prevents duplicate creation per domain)
+const demoAgentPromises = new Map<string, Promise<DemoAgentResult>>();
 
 interface DemoAgentResult {
   agentId: string;
@@ -26,22 +27,43 @@ interface DemoAgentResult {
 }
 
 /**
- * Ensures the demo agent exists. Creates it if it doesn't.
- * Uses a singleton pattern to prevent duplicate creation attempts.
+ * Get the URL for a domain (adds protocol)
  */
-export async function ensureDemoAgent(): Promise<DemoAgentResult> {
-  // Return existing promise if already in progress
-  if (demoAgentPromise) {
-    return demoAgentPromise;
-  }
-
-  demoAgentPromise = createDemoAgentIfNeeded();
-  return demoAgentPromise;
+function getDomainUrl(domain: string): string {
+  const protocol = domain.startsWith('localhost') ? 'http' : 'https';
+  return `${protocol}://${domain}`;
 }
 
-async function createDemoAgentIfNeeded(): Promise<DemoAgentResult> {
-  const domain = DEMO_AGENT_CONFIG.DOMAIN;
+/**
+ * Get the agent name for a domain
+ */
+function getAgentName(domain: string): string {
+  return `Sammy - ${domain}`;
+}
 
+/**
+ * Ensures the demo agent exists for the given domain. Creates it if it doesn't.
+ * Uses a per-domain singleton pattern to prevent duplicate creation attempts.
+ */
+export async function ensureDemoAgent(domain: string): Promise<DemoAgentResult> {
+  // Return existing promise if already in progress for this domain
+  const existingPromise = demoAgentPromises.get(domain);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const promise = createDemoAgentIfNeeded(domain);
+  demoAgentPromises.set(domain, promise);
+
+  // Clean up promise after completion (success or failure)
+  promise.finally(() => {
+    demoAgentPromises.delete(domain);
+  });
+
+  return promise;
+}
+
+async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult> {
   console.log(`Checking for demo agent: ${domain}...`);
 
   try {
@@ -68,7 +90,7 @@ async function createDemoAgentIfNeeded(): Promise<DemoAgentResult> {
     // Create new demo agent with crawl KB
     console.log(`Creating demo agent for ${domain}...`);
 
-    const normalizedUrl = DEMO_AGENT_CONFIG.URL;
+    const normalizedUrl = getDomainUrl(domain);
 
     // Create crawl KB
     const crawlKBName = generateCrawlKBName(normalizedUrl);
@@ -88,7 +110,7 @@ async function createDemoAgentIfNeeded(): Promise<DemoAgentResult> {
     const allKBIds = [crawlKBId];
 
     // Create agent
-    const agentName = DEMO_AGENT_CONFIG.NAME;
+    const agentName = getAgentName(domain);
     console.log(`Creating agent: ${agentName}...`);
 
     const agentResponse = await createAgent({
@@ -121,18 +143,14 @@ async function createDemoAgentIfNeeded(): Promise<DemoAgentResult> {
     };
   } catch (error) {
     console.error('Failed to create demo agent:', error);
-    // Reset the promise so it can be retried
-    demoAgentPromise = null;
     throw error;
   }
 }
 
 /**
- * Get demo agent info without creating it
+ * Get demo agent info for the given domain without creating it
  */
-export async function getDemoAgentInfo(): Promise<DemoAgentResult | null> {
-  const domain = DEMO_AGENT_CONFIG.DOMAIN;
-
+export async function getDemoAgentInfo(domain: string): Promise<DemoAgentResult | null> {
   try {
     const existingAgent = await findAgentByDomain(domain);
 

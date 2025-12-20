@@ -1,23 +1,39 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { ensureDemoAgent, getDemoAgentInfo } from '@/lib/demo-agent';
-import { DEMO_AGENT_CONFIG } from '@/lib/config';
+
+/**
+ * Extract domain from request Host header
+ */
+function getDomainFromRequest(request: NextRequest): string {
+  const host = request.headers.get('host');
+  if (!host) {
+    return 'localhost:3000';
+  }
+  // Remove port for standard ports
+  if (host.endsWith(':80') || host.endsWith(':443')) {
+    return host.split(':')[0];
+  }
+  return host;
+}
 
 /**
  * GET /api/demo-agent
- * Returns the demo agent info (creates it if it doesn't exist)
+ * Returns the demo agent info for the current domain (creates it if it doesn't exist)
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const domain = getDomainFromRequest(request);
+
   try {
-    // First try to get existing demo agent
-    const existingAgent = await getDemoAgentInfo();
+    // First try to get existing demo agent for this domain
+    const existingAgent = await getDemoAgentInfo(domain);
 
     if (existingAgent) {
       return NextResponse.json({
         success: true,
         agent: {
           id: existingAgent.agentId,
-          name: DEMO_AGENT_CONFIG.NAME,
-          domain: DEMO_AGENT_CONFIG.DOMAIN,
+          name: `Sammy - ${domain}`,
+          domain,
           endpoint: existingAgent.endpoint,
           accessKey: existingAgent.accessKey,
         },
@@ -45,18 +61,20 @@ export async function GET() {
 
 /**
  * POST /api/demo-agent
- * Creates the demo agent if it doesn't exist
+ * Creates the demo agent for the current domain if it doesn't exist
  */
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const domain = getDomainFromRequest(request);
+
   try {
-    const result = await ensureDemoAgent();
+    const result = await ensureDemoAgent(domain);
 
     return NextResponse.json({
       success: true,
       agent: {
         id: result.agentId,
-        name: DEMO_AGENT_CONFIG.NAME,
-        domain: DEMO_AGENT_CONFIG.DOMAIN,
+        name: `Sammy - ${domain}`,
+        domain,
         endpoint: result.endpoint,
         accessKey: result.accessKey,
       },
