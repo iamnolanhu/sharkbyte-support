@@ -94,6 +94,35 @@ export async function POST(request: NextRequest) {
     // Note: uploads/structured KBs will be created later when users upload files
     const allKBIds = [crawlKBId];
 
+    // Step 2b: Double-check for existing agent (race condition protection)
+    // Another request may have created the agent while we were waiting for KB/database
+    console.log(`Re-checking for existing agent before creation...`);
+    const raceCheckAgent = await findAgentByDomain(domain);
+    if (raceCheckAgent) {
+      console.log(`Agent was created by another request: ${raceCheckAgent.uuid}`);
+      const agentDetails = await getAgent(raceCheckAgent.uuid);
+      const agent = agentDetails.agent;
+      const keyResponse = await createAccessKey(agent.uuid);
+      const accessKey = keyResponse.api_key_info?.secret_key ||
+                       keyResponse.access_key?.key ||
+                       keyResponse.access_key?.api_key || '';
+
+      const kbIds = getKnowledgeBaseIds(agent);
+      return NextResponse.json({
+        success: true,
+        agentId: agent.uuid,
+        agentName: agent.name,
+        kbId: kbIds[0] || crawlKBId,
+        kbIds: kbIds.length > 0 ? kbIds : [crawlKBId],
+        endpoint: agent.endpoint || '',
+        accessKey,
+        isExisting: true,
+        status: 'ready',
+        message: `Found existing agent: ${agent.name}`,
+        url: normalizedUrl,
+      });
+    }
+
     // Step 3: Create agent with crawl KB
     const agentName = generateAgentName(normalizedUrl);
     console.log(`Creating new agent: ${agentName}...`);
