@@ -20,7 +20,7 @@ export async function GET() {
     ]);
 
     const kbMap = new Map<string, KnowledgeBase>();
-    kbResponse.knowledge_bases.forEach((kb) => kbMap.set(kb.uuid, kb));
+    (kbResponse.knowledge_bases || []).forEach((kb) => kbMap.set(kb.uuid, kb));
 
     // Map agents to include their KB details
     const agentsWithKBs: AgentWithKBs[] = agents

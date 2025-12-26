@@ -494,7 +494,10 @@ export async function listKnowledgeBases(): Promise<ListKBResponse> {
     throw new Error(`Failed to list Knowledge Bases: ${JSON.stringify(error)}`);
   }
 
-  return response.json();
+  const data = await response.json();
+  return {
+    knowledge_bases: data.knowledge_bases || [],
+  };
 }
 
 export async function deleteKnowledgeBase(kbId: string): Promise<void> {
