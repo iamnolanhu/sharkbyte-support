@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft,
@@ -96,7 +96,10 @@ function KBCard({
 export default function AgentManagementPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const agentId = params.agentId as string;
+  const isFromIndexing = searchParams.get('indexing') === 'true';
+  const kbId = searchParams.get('kbId');
 
   const [agent, setAgent] = useState<AgentWithKBs | null>(null);
   const [accessKey, setAccessKey] = useState<string>('');
@@ -110,20 +113,49 @@ export default function AgentManagementPage() {
   const [repairSuccess, setRepairSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<'deploying' | 'ready' | 'error' | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string>('');
+
+  // Agent is ready when it has an endpoint and status is ready (or status not yet checked for existing agents)
+  const isAgentReady = Boolean(agent?.endpoint && (agentStatus === 'ready' || agentStatus === null));
 
   useEffect(() => {
     async function loadAgent() {
       try {
-        // Include accessKey=true to get an access key for the embed code
-        const res = await fetch(`/api/agents/${agentId}?includeAccessKey=true`);
+        // Check localStorage for existing accessKey first
+        const storedData = localStorage.getItem(`sharkbyte-agent-${agentId}`);
+        const storedAgent = storedData ? JSON.parse(storedData) : null;
+        const existingKey = storedAgent?.accessKey;
+
+        // Fetch agent data (only request new key if we don't have one stored)
+        const needsNewKey = !existingKey;
+        const res = await fetch(
+          `/api/agents/${agentId}${needsNewKey ? '?includeAccessKey=true&forceNewKey=true' : ''}`
+        );
         const data = await res.json();
 
         if (data.success && data.agent) {
           setAgent(data.agent);
           setInstruction(data.instruction || '');
           setOriginalInstruction(data.instruction || '');
-          if (data.accessKey) {
-            setAccessKey(data.accessKey);
+
+          // Use existing key from localStorage, or new key from API
+          const keyToUse = existingKey || data.accessKey || '';
+          if (keyToUse) {
+            setAccessKey(keyToUse);
+            // Store complete agent data in localStorage if we got a new key
+            if (data.accessKey && !existingKey) {
+              const completeAgent = {
+                id: data.agent.uuid,
+                name: data.agent.name,
+                kbId: data.agent.knowledgeBases?.[0]?.uuid || '',
+                url: `https://${data.agent.domain}`,
+                endpoint: data.agent.endpoint || '',
+                accessKey: data.accessKey,
+                createdAt: data.agent.createdAt,
+              };
+              localStorage.setItem(`sharkbyte-agent-${agentId}`, JSON.stringify(completeAgent));
+            }
           }
         } else {
           setError(data.error || 'Agent not found');
@@ -138,6 +170,104 @@ export default function AgentManagementPage() {
 
     loadAgent();
   }, [agentId]);
+
+  // Poll agent status until ready (continue from homepage polling)
+  useEffect(() => {
+    // Skip if no agent loaded yet
+    if (!agent) return;
+
+    // If agent already has endpoint, it's ready - no need to poll
+    if (agent.endpoint) {
+      if (agentStatus !== 'ready') {
+        setAgentStatus('ready');
+      }
+      return;
+    }
+
+    // No endpoint means agent is still deploying - need to poll
+    // But we need kbId to poll status
+    if (!kbId) {
+      setAgentStatus('deploying');
+      setStatusMessage('Agent is deploying...');
+      return;
+    }
+
+    if (agentStatus === 'ready') return;
+
+    let isCancelled = false;
+    const pollInterval = 3000; // Poll every 3 seconds
+
+    const checkStatus = async () => {
+      if (isCancelled) return;
+
+      try {
+        const res = await fetch(
+          `/api/agent-status?agentId=${agentId}&kbId=${kbId}&url=${encodeURIComponent(agent.domain || '')}`
+        );
+        const data = await res.json();
+
+        if (isCancelled) return;
+
+        if (data.status === 'ready') {
+          setAgentStatus('ready');
+          setStatusMessage('');
+          // Reload agent to get updated endpoint
+          // Check localStorage for existing key - don't create new one if we have it
+          const storedData = localStorage.getItem(`sharkbyte-agent-${agentId}`);
+          const storedAgent = storedData ? JSON.parse(storedData) : null;
+          const existingKey = storedAgent?.accessKey;
+          const needsNewKey = !existingKey;
+
+          const agentRes = await fetch(
+            `/api/agents/${agentId}${needsNewKey ? '?includeAccessKey=true&forceNewKey=true' : ''}`
+          );
+          const agentData = await agentRes.json();
+          if (agentData.success && agentData.agent) {
+            setAgent(agentData.agent);
+            // Use existing key or new key
+            const keyToUse = existingKey || agentData.accessKey || '';
+            if (keyToUse) {
+              setAccessKey(keyToUse);
+              // Store complete agent data if we created a new key
+              if (agentData.accessKey && !existingKey) {
+                const completeAgent = {
+                  id: agentData.agent.uuid,
+                  name: agentData.agent.name,
+                  kbId: agentData.agent.knowledgeBases?.[0]?.uuid || '',
+                  url: `https://${agentData.agent.domain}`,
+                  endpoint: agentData.agent.endpoint || '',
+                  accessKey: agentData.accessKey,
+                  createdAt: agentData.agent.createdAt,
+                };
+                localStorage.setItem(`sharkbyte-agent-${agentId}`, JSON.stringify(completeAgent));
+              }
+            }
+          }
+        } else if (data.status === 'error') {
+          setAgentStatus('error');
+          setStatusMessage(data.message || 'Agent deployment failed');
+        } else {
+          // Still deploying/indexing
+          setAgentStatus('deploying');
+          setStatusMessage(data.message || 'Agent is deploying...');
+          // Continue polling
+          setTimeout(checkStatus, pollInterval);
+        }
+      } catch (err) {
+        console.error('Status poll error:', err);
+        if (!isCancelled) {
+          setTimeout(checkStatus, pollInterval);
+        }
+      }
+    };
+
+    // Start polling
+    checkStatus();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [agent, agentId, kbId, agentStatus]);
 
   const handleSaveInstruction = async () => {
     setIsSaving(true);
@@ -285,12 +415,24 @@ export default function AgentManagementPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {!isAgentReady && statusMessage && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                {statusMessage}
+              </span>
+            )}
             <Button
               onClick={() => router.push(`/agents/${agentId}/chat`)}
               className="gap-2"
+              disabled={!isAgentReady}
+              title={!isAgentReady ? 'Agent is still deploying...' : undefined}
             >
-              <MessageCircle className="w-4 h-4" />
-              Open Chat
+              {!isAgentReady ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <MessageCircle className="w-4 h-4" />
+              )}
+              {isAgentReady ? 'Open Chat' : 'Deploying...'}
             </Button>
             <AgentHistory />
             <ThemeToggle />

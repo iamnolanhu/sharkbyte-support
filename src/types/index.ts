@@ -227,7 +227,7 @@ export interface CreateAgentApiResponse {
 }
 
 export interface AgentStatusResponse {
-  status: 'creating' | 'indexing' | 'ready' | 'error';
+  status: 'creating' | 'indexing' | 'deploying' | 'ready' | 'error';
   kbStatus?: string;
   agentStatus?: string;
   endpoint?: string;

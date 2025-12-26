@@ -42,11 +42,15 @@ export const DO_CONFIG = {
   },
 } as const;
 
-// Demo Agent Configuration
+// App Domain Configuration - set via environment variable for different deployments
+// Defaults to production domain if not set
+export const APP_DOMAIN = process.env.APP_DOMAIN || 'sharkbyte-support.vercel.app';
+
+// Demo Agent Configuration (uses APP_DOMAIN)
 export const DEMO_AGENT_CONFIG = {
-  URL: 'https://sharkbyte-demo.vercel.app',
-  NAME: 'Sammy - sharkbyte-demo.vercel.app',
-  DOMAIN: 'sharkbyte-demo.vercel.app',
+  get URL() { return `https://${APP_DOMAIN}`; },
+  get NAME() { return `Sammy - ${APP_DOMAIN}`; },
+  get DOMAIN() { return APP_DOMAIN; },
 } as const;
 
 // Knowledge Base Types

@@ -14,7 +14,6 @@ import {
   getKnowledgeBaseIds,
   getOrCreateKnowledgeBase,
   attachKnowledgeBaseToAgent,
-  updateAgentVisibility,
 } from '@/lib/digitalocean';
 import type { CreateAgentRequest, CreateAgentApiResponse } from '@/types';
 
@@ -136,15 +135,8 @@ export async function POST(request: NextRequest) {
     const agent = agentResponse.agent;
     console.log(`Agent created: ${agent.uuid}`);
 
-    // Step 3b: Set agent to public so widget works without authentication
-    console.log(`Setting agent to public...`);
-    try {
-      await updateAgentVisibility(agent.uuid, 'VISIBILITY_PUBLIC');
-      console.log(`Agent set to public`);
-    } catch (visibilityError) {
-      console.warn(`Failed to set agent to public (can be done manually):`,
-        visibilityError instanceof Error ? visibilityError.message : visibilityError);
-    }
+    // Note: Agent visibility is set to public by agent-status polling
+    // when the agent becomes ACTIVE (can't be set while still deploying)
 
     // Step 4: Create API key for the agent
     console.log(`Creating API key...`);

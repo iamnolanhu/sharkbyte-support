@@ -42,6 +42,81 @@ function getHeaders(): HeadersInit {
 }
 
 // ============================================
+// Retry Logic with Exponential Back-off
+// ============================================
+
+interface RetryOptions {
+  maxRetries?: number;
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+  retryableStatuses?: number[];
+}
+
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  retryOptions: RetryOptions = {}
+): Promise<Response> {
+  const {
+    maxRetries = 3,
+    initialDelayMs = 1000,
+    maxDelayMs = 30000,
+    retryableStatuses = [429, 500, 502, 503, 504],
+  } = retryOptions;
+
+  let lastError: Error | null = null;
+  let lastResponse: Response | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+
+      if (response.ok || !retryableStatuses.includes(response.status)) {
+        return response;
+      }
+
+      lastResponse = response;
+
+      // Check for Retry-After header (429 responses)
+      const retryAfter = response.headers.get('Retry-After');
+      let delayMs = initialDelayMs * Math.pow(2, attempt);
+
+      if (retryAfter) {
+        const retryAfterSecs = parseInt(retryAfter, 10);
+        if (!isNaN(retryAfterSecs)) {
+          delayMs = retryAfterSecs * 1000;
+        }
+      }
+
+      delayMs = Math.min(delayMs, maxDelayMs);
+
+      if (attempt < maxRetries) {
+        console.log(
+          `[Retry] ${response.status} on ${url}, attempt ${attempt + 1}/${maxRetries}, waiting ${delayMs}ms`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < maxRetries) {
+        const delayMs = Math.min(initialDelayMs * Math.pow(2, attempt), maxDelayMs);
+        console.log(
+          `[Retry] Network error on ${url}, attempt ${attempt + 1}/${maxRetries}, waiting ${delayMs}ms`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  // Return the last response if we have one (for proper error handling downstream)
+  if (lastResponse) {
+    return lastResponse;
+  }
+
+  throw lastError || new Error('Max retries exceeded');
+}
+
+// ============================================
 // Knowledge Base Functions
 // ============================================
 
@@ -113,16 +188,20 @@ export async function createKnowledgeBaseSmartCrawl(
     console.log('No database_id provided - will auto-provision');
   }
 
-  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(requestBody),
-  });
+  const response = await fetchWithRetry(
+    `${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases`,
+    {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(requestBody),
+    },
+    { maxRetries: 3, initialDelayMs: 2000 } // Longer delay for creation operations
+  );
 
   if (!response.ok) {
     const error = await response.json();
     const errorMessage = error.message || error.id || 'Unknown error';
-    
+
     // Provide helpful error message for database not found
     if (error.id === 'not_found' && errorMessage.includes('vector database')) {
       const usedDatabaseId = databaseId || DO_CONFIG.DATABASE_ID;
@@ -182,16 +261,20 @@ export async function createKnowledgeBase(
     console.log('No database_id provided - will auto-provision');
   }
 
-  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(requestBody),
-  });
+  const response = await fetchWithRetry(
+    `${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases`,
+    {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(requestBody),
+    },
+    { maxRetries: 3, initialDelayMs: 2000 } // Longer delay for creation operations
+  );
 
   if (!response.ok) {
     const error = await response.json();
     const errorMessage = error.message || error.id || 'Unknown error';
-    
+
     // Provide helpful error message for database not found
     if (error.id === 'not_found' && errorMessage.includes('vector database')) {
       const usedDatabaseId = databaseId || DO_CONFIG.DATABASE_ID;
@@ -213,11 +296,12 @@ export async function createKnowledgeBase(
 }
 
 export async function getKnowledgeBase(kbId: string): Promise<GetKBResponse> {
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${DO_CONFIG.API_BASE}/gen-ai/knowledge_bases/${kbId}`,
     {
       headers: getHeaders(),
-    }
+    },
+    { maxRetries: 2, initialDelayMs: 500 } // Shorter delay for polling operations
   );
 
   if (!response.ok) {
@@ -375,13 +459,17 @@ export async function uploadContentToKB(
 }
 
 export async function startIndexingJob(kbId: string): Promise<void> {
-  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/indexing_jobs`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({
-      knowledge_base_uuid: kbId,
-    }),
-  });
+  const response = await fetchWithRetry(
+    `${DO_CONFIG.API_BASE}/gen-ai/indexing_jobs`,
+    {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        knowledge_base_uuid: kbId,
+      }),
+    },
+    { maxRetries: 2, initialDelayMs: 1000 }
+  );
 
   // 200 OK or empty response means success
   if (!response.ok) {
@@ -639,17 +727,21 @@ export async function createAgent(
     knowledge_base_count: requestBody.knowledge_base_ids.length,
   });
 
-  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/agents`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(requestBody),
-  });
+  const response = await fetchWithRetry(
+    `${DO_CONFIG.API_BASE}/gen-ai/agents`,
+    {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(requestBody),
+    },
+    { maxRetries: 3, initialDelayMs: 2000 } // Longer delay for creation operations
+  );
 
   if (!response.ok) {
     const error = await response.json();
     const statusText = response.statusText;
     const status = response.status;
-    
+
     // Provide more detailed error information
     const errorMessage = error.message || error.id || 'Unknown error';
     const errorDetails = {
@@ -808,7 +900,7 @@ export async function deleteAgentWithKBs(agentId: string): Promise<void> {
 export async function createAccessKey(
   agentId: string
 ): Promise<CreateAccessKeyResponse> {
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/api_keys`,
     {
       method: 'POST',
@@ -816,7 +908,8 @@ export async function createAccessKey(
       body: JSON.stringify({
         name: `sharkbyte-key-${Date.now()}`,
       }),
-    }
+    },
+    { maxRetries: 2, initialDelayMs: 1000 }
   );
 
   if (!response.ok) {

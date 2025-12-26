@@ -31,32 +31,38 @@ export default function ChatPage() {
   const [showIndexingBanner, setShowIndexingBanner] = useState(indexingParam);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Always fetch fresh agent credentials from API
+  // Fetch agent data, reuse accessKey from localStorage if available
   useEffect(() => {
     async function loadAgent() {
       try {
-        // Always fetch fresh credentials from API to avoid stale data
-        const [agentRes, keyRes] = await Promise.all([
-          fetch(`/api/agents/${agentId}`),
-          fetch(`/api/agents/${agentId}`, { method: 'POST' }), // Creates new access key
-        ]);
+        // Check localStorage for existing accessKey first
+        const storedData = localStorage.getItem(`sharkbyte-agent-${agentId}`);
+        const storedAgent = storedData ? JSON.parse(storedData) : null;
+        const existingKey = storedAgent?.accessKey;
 
+        // Fetch agent data (only request new key if we don't have one stored)
+        const needsNewKey = !existingKey;
+        const agentRes = await fetch(
+          `/api/agents/${agentId}${needsNewKey ? '?includeAccessKey=true&forceNewKey=true' : ''}`
+        );
         const agentData = await agentRes.json();
-        const keyData = await keyRes.json();
 
-        if (agentData.success && agentData.agent && keyData.success) {
+        if (agentData.success && agentData.agent) {
           const agent = agentData.agent;
+          // Use existing key or new key from API
+          const keyToUse = existingKey || agentData.accessKey || '';
+
           const fetchedAgent: StoredAgent = {
             id: agent.uuid,
             name: agent.name,
             kbId: agent.knowledgeBases?.[0]?.uuid || '',
             url: `https://${agent.domain}`,
             endpoint: agent.endpoint,
-            accessKey: keyData.accessKey,
+            accessKey: keyToUse,
             createdAt: agent.createdAt,
           };
 
-          // Update localStorage with fresh data
+          // Update localStorage with fresh data (including new key if created)
           localStorage.setItem(
             `sharkbyte-agent-${agentId}`,
             JSON.stringify(fetchedAgent)
@@ -85,9 +91,11 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingContent]);
 
-  // Poll for indexing status to auto-dismiss banner when ready
+  // Poll for indexing status to auto-dismiss banner and reload agent when ready
   useEffect(() => {
-    if (!showIndexingBanner || !kbIdParam) return;
+    // Only poll if agent doesn't have endpoint yet, or if showing indexing banner
+    const needsPolling = (agent && !agent.endpoint) || showIndexingBanner;
+    if (!needsPolling || !kbIdParam) return;
 
     const checkStatus = async () => {
       try {
@@ -97,6 +105,36 @@ export default function ChatPage() {
         const data = await res.json();
         if (data.status === 'ready') {
           setShowIndexingBanner(false);
+          // Reload agent to get endpoint if we don't have it yet
+          if (!agent?.endpoint) {
+            // Check localStorage for existing key - don't create new one
+            const storedData = localStorage.getItem(`sharkbyte-agent-${agentId}`);
+            const storedAgent = storedData ? JSON.parse(storedData) : null;
+            const existingKey = storedAgent?.accessKey || agent?.accessKey;
+            const needsNewKey = !existingKey;
+
+            const agentRes = await fetch(
+              `/api/agents/${agentId}${needsNewKey ? '?includeAccessKey=true&forceNewKey=true' : ''}`
+            );
+            const agentData = await agentRes.json();
+            if (agentData.success && agentData.agent) {
+              const keyToUse = existingKey || agentData.accessKey || '';
+              const fetchedAgent: StoredAgent = {
+                id: agentData.agent.uuid,
+                name: agentData.agent.name,
+                kbId: agentData.agent.knowledgeBases?.[0]?.uuid || '',
+                url: `https://${agentData.agent.domain}`,
+                endpoint: agentData.agent.endpoint,
+                accessKey: keyToUse,
+                createdAt: agentData.agent.createdAt,
+              };
+              // Store in localStorage if we created a new key
+              if (agentData.accessKey && needsNewKey) {
+                localStorage.setItem(`sharkbyte-agent-${agentId}`, JSON.stringify(fetchedAgent));
+              }
+              setAgent(fetchedAgent);
+            }
+          }
         }
       } catch (err) {
         console.error('Status check error:', err);
@@ -107,10 +145,19 @@ export default function ChatPage() {
     checkStatus();
     const interval = setInterval(checkStatus, 5000);
     return () => clearInterval(interval);
-  }, [showIndexingBanner, agentId, kbIdParam]);
+  }, [showIndexingBanner, agentId, kbIdParam, agent]);
+
+  // Check if agent is ready for chat (has endpoint)
+  const isAgentReady = Boolean(agent?.endpoint);
 
   const sendMessage = async (content: string) => {
     if (!agent) return;
+
+    // Prevent sending if agent doesn't have an endpoint yet
+    if (!agent.endpoint) {
+      console.error('Cannot send message: Agent endpoint not available yet');
+      return;
+    }
 
     const userMessage: ChatMessageType = { role: 'user', content };
     setMessages((prev) => [...prev, userMessage]);
@@ -333,7 +380,16 @@ export default function ChatPage() {
       </main>
 
       {/* Input */}
-      <ChatInput onSend={sendMessage} isLoading={isLoading} />
+      {isAgentReady ? (
+        <ChatInput onSend={sendMessage} isLoading={isLoading} />
+      ) : (
+        <div className="p-4 bg-card border-t border-border">
+          <div className="flex items-center justify-center gap-2 text-muted-foreground">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span>Agent is still deploying... Chat will be available shortly.</span>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="py-4 border-t border-border bg-card/50">

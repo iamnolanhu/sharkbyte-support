@@ -7,6 +7,7 @@ import {
   startIndexingJob,
   extractDomain,
   testContentQuality,
+  updateAgentVisibility,
 } from '@/lib/digitalocean';
 import { scrapeUrl } from '@/lib/firecrawl';
 import { FIRECRAWL_CONFIG } from '@/lib/config';
@@ -18,6 +19,40 @@ const firecrawlInProgress = new Set<string>();
 const qualityCheckInProgress = new Set<string>();
 // Cache quality check results (KB ID -> isLowQuality)
 const qualityCheckResults = new Map<string, boolean>();
+// Track agents we've already set to public (to avoid repeated calls)
+const agentsSetToPublic = new Set<string>();
+
+/**
+ * Check if agent is deployed and ready for chat
+ * Agent is ready when it has an endpoint URL (not empty)
+ * Also sets agent to public on first activation
+ */
+async function checkAgentDeployment(
+  agentId: string,
+  agentEndpoint: string | undefined
+): Promise<{ isDeployed: boolean; message?: string }> {
+  // Agent is ready when it has an endpoint URL
+  if (agentEndpoint) {
+    // Agent has endpoint - try to set public if we haven't already
+    if (!agentsSetToPublic.has(agentId)) {
+      try {
+        await updateAgentVisibility(agentId, 'VISIBILITY_PUBLIC');
+        agentsSetToPublic.add(agentId);
+        console.log(`[agent-status] Agent ${agentId} set to public`);
+      } catch (err) {
+        // Log but don't fail - agent is still usable
+        console.log(`[agent-status] Could not set agent public: ${err}`);
+      }
+    }
+    return { isDeployed: true };
+  }
+
+  // Agent doesn't have endpoint yet - still deploying
+  return {
+    isDeployed: false,
+    message: 'Agent is deploying...',
+  };
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -41,7 +76,12 @@ export async function GET(request: NextRequest) {
 
     // Check Agent status
     const agentResponse = await getAgent(agentId);
-    const agentStatus = agentResponse.agent.status;
+    const agentStatus = agentResponse.agent.status || '';
+    // DO API may return endpoint in either field - use fallback pattern
+    const agentEndpoint = agentResponse.agent.deployment?.url || agentResponse.agent.endpoint || '';
+
+    // Debug: Log endpoint detection
+    console.log(`[agent-status] Agent ${agentId}: endpoint='${agentEndpoint}', deployment.url='${agentResponse.agent.deployment?.url}', agent.endpoint='${agentResponse.agent.endpoint}'`);
 
     // Use isKBReady to determine overall status
     const readiness = await isKBReady(kbId);
@@ -77,11 +117,24 @@ export async function GET(request: NextRequest) {
             message = 'Detected login pages. Re-scraping with enhanced method...';
           } else {
             // Firecrawl already ran, content should be better now
-            status = agentStatus === 'active' ? 'ready' : 'creating';
+            // Check if agent is also deployed
+            const deployment = await checkAgentDeployment(agentId, agentEndpoint);
+            if (deployment.isDeployed) {
+              status = 'ready';
+            } else {
+              status = 'deploying';
+              message = deployment.message;
+            }
           }
         } else if (cachedResult === false) {
-          // Already determined to be good quality
-          status = agentStatus === 'active' ? 'ready' : 'creating';
+          // Already determined to be good quality - check if agent is deployed
+          const deployment = await checkAgentDeployment(agentId, agentEndpoint);
+          if (deployment.isDeployed) {
+            status = 'ready';
+          } else {
+            status = 'deploying';
+            message = deployment.message;
+          }
         } else if (qualityCheckInProgress.has(kbId)) {
           // Quality check is running
           status = 'indexing';
@@ -89,7 +142,7 @@ export async function GET(request: NextRequest) {
         } else {
           // Need to check quality - run in background
           qualityCheckInProgress.add(kbId);
-          triggerQualityCheck(agentId, kbId, url, agentResponse.agent.endpoint).finally(() => {
+          triggerQualityCheck(agentId, kbId, url, agentEndpoint).finally(() => {
             qualityCheckInProgress.delete(kbId);
           });
           status = 'indexing';
@@ -97,7 +150,14 @@ export async function GET(request: NextRequest) {
         }
       } else {
         // KB is ready with content (or no Firecrawl available)
-        status = agentStatus === 'active' ? 'ready' : 'creating';
+        // Check if agent is also deployed
+        const deployment = await checkAgentDeployment(agentId, agentEndpoint);
+        if (deployment.isDeployed) {
+          status = 'ready';
+        } else {
+          status = 'deploying';
+          message = deployment.message;
+        }
       }
     } else if (indexStatus === 'INDEX_JOB_STATUS_RUNNING' || indexStatus === 'INDEX_JOB_STATUS_PENDING') {
       status = 'indexing';
@@ -115,7 +175,7 @@ export async function GET(request: NextRequest) {
       status,
       kbStatus: kb.status,
       agentStatus,
-      endpoint: agentResponse.agent.endpoint,
+      endpoint: agentEndpoint,
       message,
     };
 

@@ -36,12 +36,15 @@ export default function Home() {
   useEffect(() => {
     if (step !== 'indexing' || !agentData) return;
 
-    const pollStatus = async () => {
-      // Check for timeout - navigate to chat anyway after max attempts
-      const currentCount = pollCount + 1;
-      setPollCount(currentCount);
+    // Use local variable to track poll count (avoids stale closure issue with state)
+    let localPollCount = 0;
 
-      if (currentCount >= MAX_POLL_ATTEMPTS) {
+    const pollStatus = async () => {
+      localPollCount++;
+      setPollCount(localPollCount); // Update state for UI if needed
+
+      // Check for timeout - navigate to chat anyway after max attempts
+      if (localPollCount >= MAX_POLL_ATTEMPTS) {
         // Store in localStorage and navigate to agent dashboard with indexing flag
         localStorage.setItem(
           `sharkbyte-agent-${agentData.agentId}`,

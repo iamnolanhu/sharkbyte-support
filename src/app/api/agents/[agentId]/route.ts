@@ -79,12 +79,14 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const domain = domainMatch ? domainMatch[1] : extractDomain(agent.name);
 
     // Check if we need to create an access key for the embed code
-    // Only create if includeAccessKey=true query param is present
+    // Only create if BOTH includeAccessKey=true AND forceNewKey=true
+    // This prevents creating multiple keys - frontend should cache in localStorage
     const url = new URL(request.url);
     const includeAccessKey = url.searchParams.get('includeAccessKey') === 'true';
+    const forceNewKey = url.searchParams.get('forceNewKey') === 'true';
     let accessKey = '';
 
-    if (includeAccessKey) {
+    if (includeAccessKey && forceNewKey) {
       try {
         // Check existing keys first to log count (helps with debugging)
         const existingKeys = await listAccessKeys(agentId);
@@ -96,6 +98,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
         accessKey = keyResponse.api_key_info?.secret_key ||
                    keyResponse.access_key?.key ||
                    keyResponse.access_key?.api_key || '';
+        console.log(`Created new API key for agent ${agentId}`);
       } catch (error) {
         console.error('Failed to create access key:', error);
       }
