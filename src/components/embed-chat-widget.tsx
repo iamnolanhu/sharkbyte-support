@@ -1,22 +1,27 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Streamdown } from 'streamdown';
 import type { BundledTheme } from 'shiki';
 import {
   type Theme,
+  type ChatMessage,
   themes,
   getAccentColor,
   CHAT_CONSTANTS,
   OceanDecorationsInline,
   getOceanDecorationsStyles,
   ChatFooter,
+  useChat,
+  CloseIcon,
+  SendIcon,
+  LoaderIcon,
+  SunIcon,
+  MoonIcon,
+  WavesIcon,
+  MaximizeIcon,
+  MinimizeIcon,
 } from './chat';
-
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-}
 
 interface EmbedChatWidgetProps {
   endpoint: string;
@@ -40,13 +45,25 @@ export function EmbedChatWidget({
   // Compute default welcome message with agent name
   const defaultWelcome = welcomeMessage || CHAT_CONSTANTS.getDefaultWelcome(agentName);
   const [isOpen, setIsOpen] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [theme, setTheme] = useState<Theme>('light');
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [streamingContent, setStreamingContent] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Use shared chat hook for message handling
+  const {
+    messages,
+    input,
+    setInput,
+    sendMessage,
+    isLoading,
+    streamingContent,
+    messagesEndRef,
+    inputRef,
+    handleKeyDown,
+  } = useChat({
+    apiUrl: `https://sharkbyte-support.vercel.app/api/widget/${agentId}`,
+    endpoint,
+    accessKey,
+  });
 
   // Use same theme for both light/dark slots to bypass prefers-color-scheme issues
   // This ensures the correct theme is always used regardless of OS preference
@@ -72,27 +89,32 @@ export function EmbedChatWidget({
 
   // Notify parent window of state changes
   useEffect(() => {
+    let width = 70;
+    let height = 70;
+
+    if (isOpen) {
+      if (isMaximized) {
+        width = window.innerWidth - 32;
+        height = window.innerHeight - 32;
+      } else {
+        width = 380;
+        height = 520;
+      }
+    }
+
     const message = {
-      type: isOpen ? 'sharkbyte:open' : 'sharkbyte:close',
-      payload: {
-        width: isOpen ? 380 : 70,
-        height: isOpen ? 520 : 70,
-      },
+      type: isOpen ? (isMaximized ? 'sharkbyte:maximize' : 'sharkbyte:open') : 'sharkbyte:close',
+      payload: { width, height },
     };
     window.parent.postMessage(message, '*');
-  }, [isOpen]);
-
-  // Auto-scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
+  }, [isOpen, isMaximized]);
 
   // Focus input when opened
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [isOpen]);
+  }, [isOpen, inputRef]);
 
   const cycleTheme = () => {
     if (theme === 'light') setTheme('dark');
@@ -100,139 +122,11 @@ export function EmbedChatWidget({
     else setTheme('light');
   };
 
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
-
-    const userMessage: Message = { role: 'user', content: input.trim() };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput('');
-    setIsLoading(true);
-    setStreamingContent('');
-
-    try {
-      // Use absolute URL since widget runs in iframe on external sites
-      const response = await fetch(`https://sharkbyte-support.vercel.app/api/widget/${agentId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [...messages, userMessage],
-          endpoint,
-          accessKey,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Chat request failed');
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-      let accumulated = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('0:')) {
-            try {
-              const data = JSON.parse(line.slice(2));
-              if (data.textDelta) {
-                accumulated += data.textDelta;
-                setStreamingContent(accumulated);
-              }
-            } catch {
-              // Ignore parse errors
-            }
-          }
-        }
-      }
-
-      setMessages((prev) => [...prev, { role: 'assistant', content: accumulated }]);
-      setStreamingContent('');
-    } catch (error) {
-      console.error('Chat error:', error);
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: "Sorry, I encountered an error. Please try again." },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-
   const colors = themes[theme];
   const accentColor = getAccentColor(theme, primaryColor);
   const isOcean = theme === 'ocean';
 
-  // Inline SVG icons
-  const CloseIcon = () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-
-  const SendIcon = () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <line x1="22" y1="2" x2="11" y2="13" />
-      <polygon points="22 2 15 22 11 13 2 9 22 2" />
-    </svg>
-  );
-
-  const LoaderIcon = () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}>
-      <line x1="12" y1="2" x2="12" y2="6" />
-      <line x1="12" y1="18" x2="12" y2="22" />
-      <line x1="4.93" y1="4.93" x2="7.76" y2="7.76" />
-      <line x1="16.24" y1="16.24" x2="19.07" y2="19.07" />
-      <line x1="2" y1="12" x2="6" y2="12" />
-      <line x1="18" y1="12" x2="22" y2="12" />
-      <line x1="4.93" y1="19.07" x2="7.76" y2="16.24" />
-      <line x1="16.24" y1="7.76" x2="19.07" y2="4.93" />
-    </svg>
-  );
-
-  const SunIcon = () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <circle cx="12" cy="12" r="5" />
-      <line x1="12" y1="1" x2="12" y2="3" />
-      <line x1="12" y1="21" x2="12" y2="23" />
-      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-      <line x1="1" y1="12" x2="3" y2="12" />
-      <line x1="21" y1="12" x2="23" y2="12" />
-      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-    </svg>
-  );
-
-  const MoonIcon = () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-    </svg>
-  );
-
-  const WavesIcon = () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" />
-      <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" />
-      <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" />
-    </svg>
-  );
-
+  // Theme icon selector using shared icons
   const ThemeIcon = () => {
     if (theme === 'light') return <SunIcon />;
     if (theme === 'dark') return <MoonIcon />;
@@ -272,8 +166,8 @@ export function EmbedChatWidget({
         {isOpen ? (
           <div
             style={{
-              width: '360px',
-              height: '500px',
+              width: isMaximized ? 'calc(100vw - 32px)' : '360px',
+              height: isMaximized ? 'calc(100vh - 32px)' : '500px',
               background: colors.bgGradient,
               borderRadius: '16px',
               boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
@@ -336,7 +230,30 @@ export function EmbedChatWidget({
                 <ThemeIcon />
               </button>
               <button
-                onClick={() => setIsOpen(false)}
+                onClick={() => setIsMaximized(!isMaximized)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  padding: '8px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)')}
+                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                title={isMaximized ? 'Minimize chat' : 'Maximize chat'}
+              >
+                {isMaximized ? <MinimizeIcon /> : <MaximizeIcon />}
+              </button>
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  setIsMaximized(false);
+                }}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -387,7 +304,7 @@ export function EmbedChatWidget({
                     }}
                   >
                     <img
-                      src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                      src={CHAT_CONSTANTS.AVATAR_URL_ABSOLUTE}
                       alt={agentName}
                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
@@ -432,7 +349,7 @@ export function EmbedChatWidget({
                       }}
                     >
                       <img
-                        src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                        src={CHAT_CONSTANTS.AVATAR_URL_ABSOLUTE}
                         alt={agentName}
                         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                       />
@@ -455,7 +372,9 @@ export function EmbedChatWidget({
                     {message.role === 'user' ? (
                       message.content
                     ) : (
-                      <Streamdown shikiTheme={shikiTheme}>{message.content}</Streamdown>
+                      <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                        <Streamdown shikiTheme={shikiTheme}>{message.content}</Streamdown>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -476,7 +395,7 @@ export function EmbedChatWidget({
                     }}
                   >
                     <img
-                      src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                      src={CHAT_CONSTANTS.AVATAR_URL_ABSOLUTE}
                       alt={agentName}
                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
@@ -493,9 +412,11 @@ export function EmbedChatWidget({
                       boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                     }}
                   >
-                    <Streamdown shikiTheme={shikiTheme} isAnimating={true}>
-                      {streamingContent}
-                    </Streamdown>
+                    <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                      <Streamdown shikiTheme={shikiTheme} isAnimating={true}>
+                        {streamingContent}
+                      </Streamdown>
+                    </div>
                   </div>
                 </div>
               )}
@@ -515,7 +436,7 @@ export function EmbedChatWidget({
                     }}
                   >
                     <img
-                      src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                      src={CHAT_CONSTANTS.AVATAR_URL_ABSOLUTE}
                       alt={agentName}
                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
@@ -617,7 +538,7 @@ export function EmbedChatWidget({
             <img
               src={CHAT_CONSTANTS.AVATAR_URL_ABSOLUTE}
               alt={`Chat with ${agentName}`}
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
             />
           </button>
         )}

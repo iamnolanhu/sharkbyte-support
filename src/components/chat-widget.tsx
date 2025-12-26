@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Send, Loader2, Maximize2, Minimize2, Sun, Moon, Waves } from 'lucide-react';
@@ -11,15 +11,10 @@ import {
   CHAT_CONSTANTS,
   getTailwindThemeClasses,
   getAccentColor,
-  FishSvg,
   OceanDecorations,
   ChatFooter,
+  useChat,
 } from './chat';
-
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-}
 
 interface ChatWidgetProps {
   endpoint: string;
@@ -42,15 +37,26 @@ export function ChatWidget({
 }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [streamingContent, setStreamingContent] = useState('');
   const [mounted, setMounted] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const { theme, setTheme } = useTheme();
+
+  // Use shared chat hook for message handling
+  const {
+    messages,
+    input,
+    setInput,
+    sendMessage,
+    isLoading,
+    streamingContent,
+    messagesEndRef,
+    inputRef,
+    handleKeyDown,
+  } = useChat({
+    apiUrl: '/api/chat',
+    endpoint,
+    accessKey,
+  });
 
   // Use same theme for both light/dark slots to bypass prefers-color-scheme issues
   // This ensures the correct theme is always used regardless of OS preference
@@ -65,94 +71,17 @@ export function ChatWidget({
     setMounted(true);
   }, []);
 
-  // Auto-scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
-
   // Focus input when opened
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [isOpen]);
+  }, [isOpen, inputRef]);
 
   const cycleTheme = () => {
     if (theme === 'light') setTheme('dark');
     else if (theme === 'dark') setTheme('ocean');
     else setTheme('light');
-  };
-
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
-
-    const userMessage: Message = { role: 'user', content: input.trim() };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput('');
-    setIsLoading(true);
-    setStreamingContent('');
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [...messages, userMessage],
-          endpoint,
-          accessKey,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Chat request failed');
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-      let accumulated = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('0:')) {
-            try {
-              const data = JSON.parse(line.slice(2));
-              if (data.textDelta) {
-                accumulated += data.textDelta;
-                setStreamingContent(accumulated);
-              }
-            } catch {
-              // Ignore parse errors
-            }
-          }
-        }
-      }
-
-      setMessages((prev) => [...prev, { role: 'assistant', content: accumulated }]);
-      setStreamingContent('');
-    } catch (error) {
-      console.error('Chat error:', error);
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: "Sorry, I encountered an error. Please try again." },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
   };
 
   const positionClasses = position === 'bottom-right'
@@ -379,18 +308,17 @@ export function ChatWidget({
             </div>
           </motion.div>
         ) : (
-          <motion.button
-            key="chat-button"
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+          <button
             onClick={() => setIsOpen(true)}
-            className="w-14 h-14 sm:w-16 sm:h-16 rounded-full shadow-lg hover:shadow-xl transition-shadow overflow-hidden"
+            className="w-14 h-14 sm:w-16 sm:h-16 rounded-full shadow-lg hover:shadow-xl overflow-hidden"
             style={{
-              boxShadow: `0 4px 20px rgba(0,0,0,0.15), 0 0 0 3px ${accentColor}40`,
+              transition: 'transform 0.2s, box-shadow 0.2s',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.15), 0 0 0 3px rgba(0,128,255,0.25)',
             }}
+            onMouseOver={(e) => (e.currentTarget.style.transform = 'scale(1.05)')}
+            onMouseOut={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+            onMouseDown={(e) => (e.currentTarget.style.transform = 'scale(0.95)')}
+            onMouseUp={(e) => (e.currentTarget.style.transform = 'scale(1.05)')}
             aria-label={`Chat with ${agentName}`}
           >
             <Image
@@ -400,7 +328,7 @@ export function ChatWidget({
               height={64}
               className="w-full h-full object-cover"
             />
-          </motion.button>
+          </button>
         )}
       </AnimatePresence>
     </div>

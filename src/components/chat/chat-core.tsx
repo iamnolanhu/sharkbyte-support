@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -48,7 +48,7 @@ export function useChat({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingContent]);
 
-  const sendMessage = useCallback(async () => {
+  const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
 
     const userMessage: ChatMessage = { role: 'user', content: input.trim() };
@@ -117,14 +117,14 @@ export function useChat({
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, messages, apiUrl, endpoint, accessKey, onError]);
+  };
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
-  }, [sendMessage]);
+  };
 
   return {
     messages,

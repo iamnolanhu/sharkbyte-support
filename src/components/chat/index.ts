@@ -32,3 +32,15 @@ export {
 
 // Footer component
 export { ChatFooter } from './chat-footer';
+
+// Shared icons
+export {
+  CloseIcon,
+  SendIcon,
+  LoaderIcon,
+  SunIcon,
+  MoonIcon,
+  WavesIcon,
+  MaximizeIcon,
+  MinimizeIcon,
+} from './chat-icons';

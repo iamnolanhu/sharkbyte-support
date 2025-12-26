@@ -77,9 +77,34 @@
     if (data.type === 'sharkbyte:open') {
       container.style.width = (data.payload.width || 380) + 'px';
       container.style.height = (data.payload.height || 520) + 'px';
+      // Reset position for normal mode
+      container.style.bottom = '16px';
+      if (config.position === 'bottom-right') {
+        container.style.right = '16px';
+        container.style.left = 'auto';
+      } else {
+        container.style.left = '16px';
+        container.style.right = 'auto';
+      }
     } else if (data.type === 'sharkbyte:close') {
       container.style.width = (data.payload.width || 70) + 'px';
       container.style.height = (data.payload.height || 70) + 'px';
+      // Reset position for closed mode
+      container.style.bottom = '16px';
+      if (config.position === 'bottom-right') {
+        container.style.right = '16px';
+        container.style.left = 'auto';
+      } else {
+        container.style.left = '16px';
+        container.style.right = 'auto';
+      }
+    } else if (data.type === 'sharkbyte:maximize') {
+      // Maximize to full viewport with padding
+      container.style.width = 'calc(100vw - 32px)';
+      container.style.height = 'calc(100vh - 32px)';
+      container.style.bottom = '16px';
+      container.style.left = '16px';
+      container.style.right = '16px';
     } else if (data.type === 'sharkbyte:resize') {
       if (data.payload.width) container.style.width = data.payload.width;
       if (data.payload.height) container.style.height = data.payload.height;
