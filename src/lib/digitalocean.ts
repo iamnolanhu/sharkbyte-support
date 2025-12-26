@@ -359,6 +359,94 @@ export function setCachedDatabaseId(databaseId: string): void {
 }
 
 // ============================================
+// Model Access Key Functions (Auto-Initialize)
+// ============================================
+
+interface ModelAccessKey {
+  uuid: string;
+  name: string;
+  created_at: string;
+}
+
+interface CreateModelAccessKeyResponse {
+  model_access_key: ModelAccessKey & { secret_key: string };
+}
+
+// Module-level cache for model access key ID
+let cachedModelAccessKeyId: string | null = null;
+
+/**
+ * List all model access keys in the account
+ */
+async function listModelAccessKeys(): Promise<ModelAccessKey[]> {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/models/api_keys`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to list model access keys: ${JSON.stringify(error)}`);
+  }
+
+  const data = await response.json();
+  return data.model_access_keys || [];
+}
+
+/**
+ * Create a new model access key
+ */
+async function createModelAccessKey(name: string): Promise<CreateModelAccessKeyResponse> {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/models/api_keys`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ name }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to create model access key: ${JSON.stringify(error)}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get or create a model access key by name.
+ * This ensures the account has a model access key, which is required
+ * before agents can use LLM models on fresh accounts.
+ */
+export async function getOrCreateModelAccessKey(name: string = 'sharkbyte-support'): Promise<string> {
+  // Return cached value if available
+  if (cachedModelAccessKeyId) {
+    return cachedModelAccessKeyId;
+  }
+
+  // Check for existing key with this name
+  const keys = await listModelAccessKeys();
+  const existing = keys.find(k => k.name === name);
+
+  if (existing) {
+    console.log(`Found existing model access key: "${name}" (${existing.uuid})`);
+    cachedModelAccessKeyId = existing.uuid;
+    return existing.uuid;
+  }
+
+  // Create new key
+  console.log(`Creating model access key: "${name}"...`);
+  const response = await createModelAccessKey(name);
+  console.log(`✅ Created model access key: "${name}" (${response.model_access_key.uuid})`);
+  cachedModelAccessKeyId = response.model_access_key.uuid;
+
+  // Log the secret key for user to save (only shown once!)
+  console.log('\n' + '='.repeat(60));
+  console.log('🔑 NEW MODEL ACCESS KEY CREATED (save this - shown only once!):');
+  console.log(`   ${response.model_access_key.secret_key}`);
+  console.log('='.repeat(60) + '\n');
+
+  return response.model_access_key.uuid;
+}
+
+// ============================================
 // Knowledge Base Functions
 // ============================================
 
@@ -939,6 +1027,9 @@ Guidelines:
 export async function createAgent(
   options: CreateAgentOptions
 ): Promise<CreateAgentResponse> {
+  // Ensure model access key exists (required for agent creation on fresh accounts)
+  await getOrCreateModelAccessKey();
+
   // Fetch KB details to use its project_id and region for consistency
   // This ensures the agent is created in the same project/region as its KBs
   const primaryKbId = options.knowledgeBaseIds[0];
