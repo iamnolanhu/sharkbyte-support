@@ -16,6 +16,8 @@ interface ConfirmDialogProps {
   variant?: 'default' | 'destructive';
   onConfirm: () => void;
   isLoading?: boolean;
+  confirmDisabled?: boolean;
+  confirmDisabledMessage?: string;
 }
 
 export function ConfirmDialog({
@@ -28,6 +30,8 @@ export function ConfirmDialog({
   variant = 'default',
   onConfirm,
   isLoading = false,
+  confirmDisabled = false,
+  confirmDisabledMessage,
 }: ConfirmDialogProps) {
   // Close on escape key
   useEffect(() => {
@@ -105,6 +109,15 @@ export function ConfirmDialog({
                 </div>
               </div>
 
+              {/* Disabled message */}
+              {confirmDisabled && confirmDisabledMessage && (
+                <div className="px-4 sm:px-6 pb-2">
+                  <p className="text-xs text-muted-foreground text-center bg-muted/50 rounded-lg p-2">
+                    {confirmDisabledMessage}
+                  </p>
+                </div>
+              )}
+
               {/* Actions */}
               <div className="p-4 sm:p-6 pt-2 sm:pt-4 flex flex-col-reverse sm:flex-row gap-2 sm:gap-3 sm:justify-end">
                 <Button
@@ -118,7 +131,7 @@ export function ConfirmDialog({
                 <Button
                   variant={variant === 'destructive' ? 'destructive' : 'default'}
                   onClick={handleConfirm}
-                  disabled={isLoading}
+                  disabled={isLoading || confirmDisabled}
                   className="w-full sm:w-auto min-h-[44px] sm:min-h-[40px]"
                 >
                   {isLoading ? 'Please wait...' : confirmLabel}

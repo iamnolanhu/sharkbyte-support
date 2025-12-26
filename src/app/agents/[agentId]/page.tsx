@@ -120,9 +120,16 @@ export default function AgentManagementPage() {
   const [copied, setCopied] = useState(false);
   const [agentStatus, setAgentStatus] = useState<'deploying' | 'ready' | 'error' | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [isLocalhost, setIsLocalhost] = useState(false);
 
   // Agent is ready when it has an endpoint and status is ready (or status not yet checked for existing agents)
   const isAgentReady = Boolean(agent?.endpoint && (agentStatus === 'ready' || agentStatus === null));
+
+  // Check if running locally (only allow delete on localhost)
+  useEffect(() => {
+    const hostname = window.location.hostname;
+    setIsLocalhost(hostname === 'localhost' || hostname === '127.0.0.1');
+  }, []);
 
   useEffect(() => {
     async function loadAgent() {
@@ -703,6 +710,8 @@ export default function AgentManagementPage() {
         variant="destructive"
         onConfirm={handleDelete}
         isLoading={isDeleting}
+        confirmDisabled={!isLocalhost}
+        confirmDisabledMessage="Deletion is only available in development mode (localhost)"
       />
     </div>
   );
