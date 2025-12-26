@@ -89,8 +89,8 @@ export function EmbedChatWidget({
 
   // Notify parent window of state changes
   useEffect(() => {
-    let width = 70;
-    let height = 70;
+    let width = 64;
+    let height = 64;
 
     if (isOpen) {
       if (isMaximized) {
@@ -166,7 +166,7 @@ export function EmbedChatWidget({
         {isOpen ? (
           <div
             style={{
-              width: isMaximized ? 'calc(100vw - 32px)' : 'min(360px, calc(100vw - 32px))',
+              width: isMaximized ? 'calc(100vw - 32px)' : 'min(380px, calc(100vw - 32px))',
               height: isMaximized ? 'calc(100vh - 32px)' : 'min(500px, calc(100vh - 100px))',
               background: colors.bgGradient,
               borderRadius: '16px',
@@ -522,8 +522,8 @@ export function EmbedChatWidget({
           <button
             onClick={() => setIsOpen(true)}
             style={{
-              width: '60px',
-              height: '60px',
+              width: '64px',
+              height: '64px',
               borderRadius: '50%',
               border: 'none',
               cursor: 'pointer',

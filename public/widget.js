@@ -38,8 +38,8 @@
     'bottom: 16px',
     config.position === 'bottom-right' ? 'right: 16px' : 'left: 16px',
     'z-index: 2147483647',
-    'width: 70px',
-    'height: 70px',
+    'width: 64px',
+    'height: 64px',
     'transition: all 0.3s ease',
   ].join(';');
 
@@ -87,8 +87,8 @@
         container.style.right = 'auto';
       }
     } else if (data.type === 'sharkbyte:close') {
-      container.style.width = (data.payload.width || 70) + 'px';
-      container.style.height = (data.payload.height || 70) + 'px';
+      container.style.width = (data.payload.width || 64) + 'px';
+      container.style.height = (data.payload.height || 64) + 'px';
       // Reset position for closed mode
       container.style.bottom = '16px';
       if (config.position === 'bottom-right') {
