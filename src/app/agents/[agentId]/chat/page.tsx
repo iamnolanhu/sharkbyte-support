@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, ExternalLink, Trash2, Settings, X, Loader2 } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Trash2, Settings, X, Loader2, History } from 'lucide-react';
+import Link from 'next/link';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { AgentHistory } from '@/components/agent-history';
 import { ChatMessage, ChatMessageSkeleton } from '@/components/chat-message';
@@ -11,6 +12,7 @@ import { ChatInput } from '@/components/chat-input';
 import { SammyAvatar } from '@/components/sammy-avatar';
 import { Button } from '@/components/ui/button';
 import { Footer } from '@/components/footer';
+import { MobileMenu, MobileMenuItem } from '@/components/mobile-menu';
 import type { ChatMessage as ChatMessageType, StoredAgent } from '@/types';
 
 export default function ChatPage() {
@@ -245,20 +247,23 @@ export default function ChatPage() {
     <div className="min-h-screen flex flex-col bg-background">
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-border bg-card/80 backdrop-blur-sm">
-        <div className="flex items-center justify-between p-4 max-w-4xl mx-auto">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between px-2 sm:px-4 py-3 sm:py-4 max-w-4xl mx-auto gap-2">
+          {/* Left section */}
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <Button
               variant="ghost"
               size="icon"
               onClick={() => router.push(`/agents/${agentId}`)}
-              className="rounded-full"
+              className="rounded-full flex-shrink-0"
               title="Agent Settings"
             >
               <ArrowLeft className="w-5 h-5" />
             </Button>
-            <SammyAvatar size="sm" animated={false} />
-            <div>
-              <h1 className="font-semibold text-foreground">
+            <Link href="/" className="flex-shrink-0">
+              <SammyAvatar size="sm" animated={false} />
+            </Link>
+            <div className="min-w-0">
+              <h1 className="font-semibold text-foreground truncate max-w-[150px] sm:max-w-none">
                 {agent.name || 'SharkByte Support'}
               </h1>
               <a
@@ -267,32 +272,58 @@ export default function ChatPage() {
                 rel="noopener noreferrer"
                 className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1"
               >
-                {new URL(agent.url).hostname}
-                <ExternalLink className="w-3 h-3" />
+                <span className="truncate max-w-[130px] sm:max-w-none">
+                  {new URL(agent.url).hostname}
+                </span>
+                <ExternalLink className="w-3 h-3 flex-shrink-0" />
               </a>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={clearChat}
-              title="Clear chat"
-              className="rounded-full"
-            >
-              <Trash2 className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => router.push(`/agents/${agentId}`)}
-              title="Agent settings"
-              className="rounded-full"
-            >
-              <Settings className="w-4 h-4" />
-            </Button>
-            <AgentHistory />
-            <ThemeToggle />
+
+          {/* Right section */}
+          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+            {/* Desktop: Show all buttons */}
+            <div className="hidden sm:flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={clearChat}
+                title="Clear chat"
+                className="rounded-full"
+              >
+                <Trash2 className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => router.push(`/agents/${agentId}`)}
+                title="Agent settings"
+                className="rounded-full"
+              >
+                <Settings className="w-4 h-4" />
+              </Button>
+              <AgentHistory />
+              <ThemeToggle />
+            </div>
+
+            {/* Mobile: Hamburger menu */}
+            <MobileMenu>
+              <MobileMenuItem
+                icon={<Trash2 className="w-5 h-5" />}
+                label="Clear Chat"
+                onClick={clearChat}
+              />
+              <MobileMenuItem
+                icon={<Settings className="w-5 h-5" />}
+                label="Agent Settings"
+                onClick={() => router.push(`/agents/${agentId}`)}
+              />
+              <MobileMenuItem
+                icon={<History className="w-5 h-5" />}
+                label="Agent History"
+                onClick={() => router.push('/')}
+              />
+            </MobileMenu>
           </div>
         </div>
       </header>
@@ -331,20 +362,20 @@ export default function ChatPage() {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center justify-center py-20 px-4"
+              className="flex flex-col items-center justify-center py-8 sm:py-16 px-4"
             >
-              <SammyAvatar size="xl" className="mb-6" />
-              <h2 className="text-2xl font-semibold text-foreground mb-2">
+              <SammyAvatar size="lg" className="mb-4" interactive />
+              <h2 className="text-xl sm:text-2xl font-semibold text-foreground mb-1 sm:mb-2">
                 Hi, I&apos;m Sammy!
               </h2>
-              <p className="text-muted-foreground text-center max-w-md mb-6">
+              <p className="text-sm sm:text-base text-muted-foreground text-center max-w-md mb-4 sm:mb-6">
                 I&apos;m your AI support agent for{' '}
                 <span className="text-primary font-medium">
                   {new URL(agent.url).hostname}
                 </span>
                 . Ask me anything about this website!
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-md">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-3 w-full max-w-md">
                 {[
                   'What services do you offer?',
                   'How can I contact support?',
@@ -354,7 +385,7 @@ export default function ChatPage() {
                   <button
                     key={suggestion}
                     onClick={() => sendMessage(suggestion)}
-                    className="p-3 text-left text-sm rounded-lg border border-border bg-card hover:bg-accent transition-colors"
+                    className="p-2.5 sm:p-3 min-h-[44px] text-left text-sm rounded-lg border border-border bg-card hover:bg-accent active:bg-accent transition-colors"
                   >
                     {suggestion}
                   </button>

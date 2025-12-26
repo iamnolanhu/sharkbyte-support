@@ -19,11 +19,15 @@ import {
   Copy,
   Check,
 } from 'lucide-react';
+import Link from 'next/link';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { AgentHistory } from '@/components/agent-history';
 import { SammyAvatar } from '@/components/sammy-avatar';
 import { Button } from '@/components/ui/button';
 import { Footer } from '@/components/footer';
+import { MobileMenu, MobileMenuItem } from '@/components/mobile-menu';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { History } from 'lucide-react';
 import type { AgentWithKBs, KnowledgeBaseInfo } from '@/types';
 
 function KBCard({
@@ -108,6 +112,7 @@ export default function AgentManagementPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isRepairing, setIsRepairing] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [repairSuccess, setRepairSuccess] = useState<string | null>(null);
@@ -299,14 +304,6 @@ export default function AgentManagementPage() {
   };
 
   const handleDelete = async () => {
-    if (
-      !confirm(
-        'Are you sure you want to delete this agent and all its knowledge bases? This cannot be undone.'
-      )
-    ) {
-      return;
-    }
-
     setIsDeleting(true);
     setError(null);
 
@@ -324,11 +321,13 @@ export default function AgentManagementPage() {
       } else {
         setError(data.error || 'Failed to delete');
         setIsDeleting(false);
+        setShowDeleteConfirm(false);
       }
     } catch (err) {
       console.error('Failed to delete agent:', err);
       setError('Failed to delete agent');
       setIsDeleting(false);
+      setShowDeleteConfirm(false);
     }
   };
 
@@ -398,32 +397,45 @@ export default function AgentManagementPage() {
     <div className="min-h-screen flex flex-col bg-background">
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-border bg-card/80 backdrop-blur-sm">
-        <div className="flex items-center justify-between p-4 max-w-4xl mx-auto">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between px-2 sm:px-4 py-3 sm:py-4 max-w-4xl mx-auto gap-2">
+          {/* Left section */}
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <Button
               variant="ghost"
               size="icon"
               onClick={() => router.push('/')}
-              className="rounded-full"
+              className="rounded-full flex-shrink-0"
             >
               <ArrowLeft className="w-5 h-5" />
             </Button>
-            <SammyAvatar size="sm" animated={false} />
-            <div>
-              <h1 className="font-semibold text-foreground">{agent?.name}</h1>
-              <p className="text-xs text-muted-foreground">{agent?.domain}</p>
+            <Link href="/" className="flex-shrink-0">
+              <SammyAvatar size="sm" animated={false} />
+            </Link>
+            <div className="min-w-0">
+              <h1 className="font-semibold text-foreground truncate max-w-[120px] sm:max-w-none">
+                {agent?.name}
+              </h1>
+              <p className="text-xs text-muted-foreground truncate max-w-[120px] sm:max-w-none">
+                {agent?.domain}
+              </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          {/* Right section */}
+          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+            {/* Status - hidden on mobile */}
             {!isAgentReady && statusMessage && (
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <span className="hidden sm:flex text-xs text-muted-foreground items-center gap-1">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 {statusMessage}
               </span>
             )}
+
+            {/* Open Chat button */}
             <Button
               onClick={() => router.push(`/agents/${agentId}/chat`)}
-              className="gap-2"
+              className="gap-1 sm:gap-2 px-2 sm:px-4"
+              size="sm"
               disabled={!isAgentReady}
               title={!isAgentReady ? 'Agent is still deploying...' : undefined}
             >
@@ -432,10 +444,32 @@ export default function AgentManagementPage() {
               ) : (
                 <MessageCircle className="w-4 h-4" />
               )}
-              {isAgentReady ? 'Open Chat' : 'Deploying...'}
+              <span className="hidden sm:inline">{isAgentReady ? 'Open Chat' : 'Deploying...'}</span>
             </Button>
-            <AgentHistory />
-            <ThemeToggle />
+
+            {/* Desktop: Show AgentHistory and ThemeToggle */}
+            <div className="hidden sm:flex items-center gap-2">
+              <AgentHistory />
+              <ThemeToggle />
+            </div>
+
+            {/* Mobile: Hamburger menu */}
+            <MobileMenu>
+              <MobileMenuItem
+                icon={<History className="w-5 h-5" />}
+                label="Agent History"
+                onClick={() => {
+                  // This will be handled by navigating to agents list or showing inline
+                  router.push('/');
+                }}
+              />
+              {!isAgentReady && statusMessage && (
+                <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {statusMessage}
+                </div>
+              )}
+            </MobileMenu>
           </div>
         </div>
       </header>
@@ -631,7 +665,7 @@ export default function AgentManagementPage() {
               Danger Zone
             </h2>
             <div className="border border-destructive/50 rounded-lg p-4 bg-destructive/5">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                   <h3 className="font-medium text-foreground">Delete Agent</h3>
                   <p className="text-sm text-muted-foreground">
@@ -640,15 +674,11 @@ export default function AgentManagementPage() {
                 </div>
                 <Button
                   variant="destructive"
-                  onClick={handleDelete}
+                  onClick={() => setShowDeleteConfirm(true)}
                   disabled={isDeleting}
-                  className="gap-2"
+                  className="gap-2 min-h-[44px] w-full sm:w-auto"
                 >
-                  {isDeleting ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-4 h-4" />
-                  )}
+                  <Trash2 className="w-4 h-4" />
                   Delete
                 </Button>
               </div>
@@ -661,6 +691,19 @@ export default function AgentManagementPage() {
       <div className="py-4 border-t border-border bg-card/50">
         <Footer />
       </div>
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        title="Delete Agent"
+        description="Are you sure you want to delete this agent and all its knowledge bases? This action cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="destructive"
+        onConfirm={handleDelete}
+        isLoading={isDeleting}
+      />
     </div>
   );
 }

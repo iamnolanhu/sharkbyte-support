@@ -89,8 +89,8 @@ export function ChatWidget({
     : 'left-4 sm:left-6';
 
   const maximizedClasses = isMaximized
-    ? 'fixed inset-4 sm:inset-6 w-auto h-auto'
-    : 'w-[340px] sm:w-[380px] h-[500px]';
+    ? 'fixed inset-2 sm:inset-4 md:inset-6 w-auto h-auto'
+    : 'w-[calc(100vw-32px)] sm:w-[340px] md:w-[380px] max-w-[380px] h-[min(500px,calc(100vh-100px))]';
 
   // Theme-aware colors using shared function
   const themeColors = getTailwindThemeClasses(theme as 'light' | 'dark' | 'ocean', mounted);

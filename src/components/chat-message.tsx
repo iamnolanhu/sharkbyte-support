@@ -50,7 +50,7 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
       {/* Message Bubble */}
       <div
         className={cn(
-          'max-w-[75%] rounded-2xl px-4 py-3',
+          'max-w-[85%] sm:max-w-[75%] rounded-2xl px-3 sm:px-4 py-2.5 sm:py-3',
           isUser
             ? 'bg-primary text-primary-foreground rounded-tr-sm'
             : 'bg-card border border-border rounded-tl-sm'

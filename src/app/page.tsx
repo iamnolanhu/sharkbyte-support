@@ -260,7 +260,7 @@ export default function Home() {
 
             {/* Features */}
             <motion.div
-              className="grid grid-cols-3 gap-2 sm:gap-4 mt-4 sm:mt-8 w-full px-2"
+              className="grid grid-cols-3 gap-2 sm:gap-4 mt-4 sm:mt-8 w-full max-w-md"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.4 }}
@@ -272,10 +272,10 @@ export default function Home() {
               ].map((feature, i) => (
                 <div
                   key={i}
-                  className="p-2 sm:p-4 rounded-lg sm:rounded-xl bg-card/50 backdrop-blur-sm border border-border text-center"
+                  className="p-2.5 sm:p-4 rounded-lg sm:rounded-xl bg-card/50 backdrop-blur-sm border border-border text-center"
                 >
                   <h3 className="text-xs sm:text-sm md:text-base font-semibold text-foreground">{feature.title}</h3>
-                  <p className="text-[10px] sm:text-xs md:text-sm text-muted-foreground">{feature.desc}</p>
+                  <p className="text-[10px] sm:text-xs md:text-sm text-muted-foreground leading-tight">{feature.desc}</p>
                 </div>
               ))}
             </motion.div>

@@ -50,8 +50,8 @@ export function ChatInput({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="p-4 border-t border-border bg-card/50 backdrop-blur-sm">
-      <div className="flex gap-2 items-end max-w-4xl mx-auto">
+    <form onSubmit={handleSubmit} className="p-3 sm:p-4 border-t border-border bg-card/50 backdrop-blur-sm safe-area-bottom">
+      <div className="flex gap-2 items-center max-w-4xl mx-auto">
         <div className="flex-1 relative">
           <textarea
             ref={textareaRef}
@@ -62,10 +62,10 @@ export function ChatInput({
             disabled={isLoading || disabled}
             rows={1}
             className={cn(
-              'w-full px-4 py-3 pr-12 rounded-xl resize-none',
+              'w-full px-3 sm:px-4 py-2.5 sm:py-3 pr-4 rounded-xl resize-none',
               'bg-background border border-border',
               'focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
-              'placeholder:text-muted-foreground',
+              'placeholder:text-muted-foreground text-base',
               'disabled:opacity-50 disabled:cursor-not-allowed',
               'transition-all duration-200'
             )}
@@ -76,7 +76,7 @@ export function ChatInput({
           type="submit"
           size="icon"
           disabled={!input.trim() || isLoading || disabled}
-          className="h-12 w-12 rounded-xl flex-shrink-0"
+          className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl flex-shrink-0"
         >
           {isLoading ? (
             <Loader2 className="w-5 h-5 animate-spin" />
@@ -86,7 +86,7 @@ export function ChatInput({
         </Button>
       </div>
 
-      <p className="text-xs text-muted-foreground text-center mt-2">
+      <p className="hidden sm:block text-xs text-muted-foreground text-center mt-2">
         Press Enter to send, Shift+Enter for new line
       </p>
     </form>

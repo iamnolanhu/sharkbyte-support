@@ -41,7 +41,7 @@ export function ProgressIndicator({
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       className={cn(
-        'w-full max-w-md p-6 rounded-2xl',
+        'w-full max-w-[calc(100vw-32px)] sm:max-w-md p-4 sm:p-6 rounded-xl sm:rounded-2xl',
         'bg-card/90 backdrop-blur-md',
         'border border-border',
         'shadow-lg',

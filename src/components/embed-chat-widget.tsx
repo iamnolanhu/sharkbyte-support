@@ -166,8 +166,8 @@ export function EmbedChatWidget({
         {isOpen ? (
           <div
             style={{
-              width: isMaximized ? 'calc(100vw - 32px)' : '360px',
-              height: isMaximized ? 'calc(100vh - 32px)' : '500px',
+              width: isMaximized ? 'calc(100vw - 32px)' : 'min(360px, calc(100vw - 32px))',
+              height: isMaximized ? 'calc(100vh - 32px)' : 'min(500px, calc(100vh - 100px))',
               background: colors.bgGradient,
               borderRadius: '16px',
               boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
@@ -216,7 +216,7 @@ export function EmbedChatWidget({
                   border: 'none',
                   color: '#fff',
                   cursor: 'pointer',
-                  padding: '8px',
+                  padding: '12px',
                   borderRadius: '50%',
                   display: 'flex',
                   alignItems: 'center',
@@ -236,7 +236,7 @@ export function EmbedChatWidget({
                   border: 'none',
                   color: '#fff',
                   cursor: 'pointer',
-                  padding: '8px',
+                  padding: '12px',
                   borderRadius: '50%',
                   display: 'flex',
                   alignItems: 'center',
@@ -259,7 +259,7 @@ export function EmbedChatWidget({
                   border: 'none',
                   color: '#fff',
                   cursor: 'pointer',
-                  padding: '8px',
+                  padding: '12px',
                   borderRadius: '50%',
                   display: 'flex',
                   alignItems: 'center',
