@@ -14,6 +14,7 @@ import {
   getKnowledgeBaseIds,
   getOrCreateKnowledgeBase,
   attachKnowledgeBaseToAgent,
+  deleteKnowledgeBase,
 } from '@/lib/digitalocean';
 import type { CreateAgentRequest, CreateAgentApiResponse } from '@/types';
 
@@ -122,16 +123,31 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Step 3: Create agent with crawl KB
+    // Step 3: Create agent with crawl KB (with rollback on failure to prevent orphan KBs)
     const agentName = generateAgentName(normalizedUrl);
     console.log(`Creating new agent: ${agentName}...`);
 
-    const agentResponse = await createAgent({
-      name: agentName,
-      knowledgeBaseIds: allKBIds,
-      instruction: getDefaultInstruction(domain),
-      description: `Customer support agent for ${domain}`,
-    });
+    let agentResponse;
+    try {
+      agentResponse = await createAgent({
+        name: agentName,
+        knowledgeBaseIds: allKBIds,
+        instruction: getDefaultInstruction(domain),
+        description: `Customer support agent for ${domain}`,
+      });
+    } catch (error) {
+      // Rollback: delete the KB to prevent orphans (only if we created it)
+      if (!kbExists) {
+        console.log(`Agent creation failed, cleaning up KB: ${crawlKBId}...`);
+        try {
+          await deleteKnowledgeBase(crawlKBId);
+          console.log(`  ✓ KB cleaned up`);
+        } catch (cleanupError) {
+          console.error(`  Failed to cleanup KB:`, cleanupError);
+        }
+      }
+      throw error;
+    }
     const agent = agentResponse.agent;
     console.log(`Agent created: ${agent.uuid}`);
 

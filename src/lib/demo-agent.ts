@@ -14,6 +14,7 @@ import {
   waitForDatabaseReady,
   getDefaultInstruction,
   generateCrawlKBName,
+  deleteKnowledgeBase,
 } from './digitalocean';
 import { APP_DOMAIN } from './config';
 
@@ -113,16 +114,29 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     // Note: uploads/structured KBs will be created later when users upload files
     const allKBIds = [crawlKBId];
 
-    // Create agent
+    // Create agent (with KB rollback on failure to prevent orphans)
     const agentName = `Sammy - ${domain}`;
     console.log(`Creating agent: ${agentName}...`);
 
-    const agentResponse = await createAgent({
-      name: agentName,
-      knowledgeBaseIds: allKBIds,
-      instruction: getDefaultInstruction(domain),
-      description: `Demo customer support agent for ${domain}`,
-    });
+    let agentResponse;
+    try {
+      agentResponse = await createAgent({
+        name: agentName,
+        knowledgeBaseIds: allKBIds,
+        instruction: getDefaultInstruction(domain),
+        description: `Demo customer support agent for ${domain}`,
+      });
+    } catch (error) {
+      // Rollback: delete the KB to prevent orphans
+      console.log(`Agent creation failed, cleaning up KB: ${crawlKBId}...`);
+      try {
+        await deleteKnowledgeBase(crawlKBId);
+        console.log(`  ✓ KB cleaned up`);
+      } catch (cleanupError) {
+        console.error(`  Failed to cleanup KB:`, cleanupError);
+      }
+      throw error;
+    }
     const agent = agentResponse.agent;
     console.log(`Agent created: ${agent.uuid}`);
 

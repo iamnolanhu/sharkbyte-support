@@ -394,8 +394,9 @@ async function listModelAccessKeys(): Promise<ModelAccessKey[]> {
 
 /**
  * Create a new model access key
+ * Note: Returns unknown because DO API response structure may vary
  */
-async function createModelAccessKey(name: string): Promise<CreateModelAccessKeyResponse> {
+async function createModelAccessKey(name: string): Promise<unknown> {
   const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/models/api_keys`, {
     method: 'POST',
     headers: getHeaders(),
@@ -407,7 +408,9 @@ async function createModelAccessKey(name: string): Promise<CreateModelAccessKeyR
     throw new Error(`Failed to create model access key: ${JSON.stringify(error)}`);
   }
 
-  return response.json();
+  const data = await response.json();
+  console.log('Model access key creation response:', JSON.stringify(data, null, 2));
+  return data;
 }
 
 /**
@@ -434,16 +437,121 @@ export async function getOrCreateModelAccessKey(name: string = 'sharkbyte-suppor
   // Create new key
   console.log(`Creating model access key: "${name}"...`);
   const response = await createModelAccessKey(name);
-  console.log(`✅ Created model access key: "${name}" (${response.model_access_key.uuid})`);
-  cachedModelAccessKeyId = response.model_access_key.uuid;
+
+  // Handle possible response structures:
+  // - { api_key_info: { uuid, name, secret_key } } (actual DO API response)
+  // - { model_access_key: { uuid, name, secret_key } } (docs suggested)
+  // - { uuid, name, secret_key } (direct)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const keyData = (response as any).api_key_info || (response as any).model_access_key || response;
+
+  if (!keyData?.uuid) {
+    console.error('Unexpected model access key response:', JSON.stringify(response, null, 2));
+    throw new Error('Model access key creation succeeded but response missing uuid');
+  }
+
+  console.log(`✅ Created model access key: "${name}" (${keyData.uuid})`);
+  cachedModelAccessKeyId = keyData.uuid;
 
   // Log the secret key for user to save (only shown once!)
-  console.log('\n' + '='.repeat(60));
-  console.log('🔑 NEW MODEL ACCESS KEY CREATED (save this - shown only once!):');
-  console.log(`   ${response.model_access_key.secret_key}`);
-  console.log('='.repeat(60) + '\n');
+  if (keyData.secret_key) {
+    console.log('\n' + '='.repeat(60));
+    console.log('🔑 NEW MODEL ACCESS KEY CREATED (save this - shown only once!):');
+    console.log(`   ${keyData.secret_key}`);
+    console.log('='.repeat(60) + '\n');
+  }
 
-  return response.model_access_key.uuid;
+  return keyData.uuid;
+}
+
+// ============================================
+// Workspace Functions (Auto-Initialize)
+// ============================================
+
+interface Workspace {
+  uuid: string;
+  name: string;
+  description?: string;
+  created_at: string;
+}
+
+// Module-level cache for workspace ID
+let cachedWorkspaceId: string | null = null;
+
+/**
+ * List all workspaces in the account
+ */
+async function listWorkspaces(): Promise<Workspace[]> {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/workspaces`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to list workspaces: ${JSON.stringify(error)}`);
+  }
+
+  const data = await response.json();
+  return data.workspaces || [];
+}
+
+/**
+ * Create a new workspace
+ */
+async function createWorkspace(name: string, description?: string): Promise<unknown> {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/workspaces`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ name, description }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to create workspace: ${JSON.stringify(error)}`);
+  }
+
+  const data = await response.json();
+  console.log('Workspace creation response:', JSON.stringify(data, null, 2));
+  return data;
+}
+
+/**
+ * Get or create a workspace by name.
+ * This ensures the account has a workspace, which is required
+ * before agents can be created on fresh accounts.
+ */
+export async function getOrCreateWorkspace(name: string = 'SharkByte Support'): Promise<string> {
+  // Return cached value if available
+  if (cachedWorkspaceId) {
+    return cachedWorkspaceId;
+  }
+
+  // Check for existing workspace with this name
+  const workspaces = await listWorkspaces();
+  const existing = workspaces.find(w => w.name === name);
+
+  if (existing) {
+    console.log(`Found existing workspace: "${name}" (${existing.uuid})`);
+    cachedWorkspaceId = existing.uuid;
+    return existing.uuid;
+  }
+
+  // Create new workspace
+  console.log(`Creating workspace: "${name}"...`);
+  const response = await createWorkspace(name, 'Auto-created for SharkByte Support agents');
+
+  // Handle response structure (workspace may be wrapped)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wsData = (response as any).workspace || response;
+
+  if (!wsData?.uuid) {
+    console.error('Unexpected workspace response:', JSON.stringify(response, null, 2));
+    throw new Error('Workspace creation succeeded but response missing uuid');
+  }
+
+  console.log(`✅ Created workspace: "${name}" (${wsData.uuid})`);
+  cachedWorkspaceId = wsData.uuid;
+  return wsData.uuid;
 }
 
 // ============================================
@@ -1029,6 +1137,9 @@ export async function createAgent(
 ): Promise<CreateAgentResponse> {
   // Ensure model access key exists (required for agent creation on fresh accounts)
   await getOrCreateModelAccessKey();
+
+  // Ensure workspace exists (required for agent creation on fresh accounts)
+  await getOrCreateWorkspace();
 
   // Fetch KB details to use its project_id and region for consistency
   // This ensures the agent is created in the same project/region as its KBs
