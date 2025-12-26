@@ -59,7 +59,7 @@ SharkByte instantly creates an AI chatbot that can answer questions about any we
 
 ## Tech Stack
 
-- **Framework**: Next.js 16 (App Router + Turbopack)
+- **Framework**: Next.js 16.0 (App Router + Turbopack)
 - **UI Library**: React 19.2
 - **Styling**: Tailwind CSS v4 + shadcn/ui
 - **AI**: DigitalOcean Gradient AI
@@ -100,7 +100,6 @@ Create a `.env.local` file:
 ```env
 # Required
 DO_API_TOKEN=your_digitalocean_api_token      # https://cloud.digitalocean.com/account/api/tokens
-FIRECRAWL_API_KEY=your_firecrawl_api_key      # https://firecrawl.dev
 DO_PROJECT_ID=your_project_id                  # Your DigitalOcean project UUID
 
 # DigitalOcean Gradient AI
@@ -108,8 +107,9 @@ DO_REGION=tor1                                 # Only tor1 supports gen-ai agent
 DO_EMBEDDING_MODEL_UUID=22653204-79ed-11ef-bf8f-4e013e2ddde4  # gte-large (default)
 DO_LLM_MODEL_UUID=18bc9b8f-73c5-11f0-b074-4e013e2ddde4        # GPT-oss-120b (default)
 
-# Optional - Reuse existing database
-DO_DATABASE_ID=your_database_id
+# Optional
+DO_DATABASE_ID=your_database_id               # Reuse existing vector database
+FIRECRAWL_API_KEY=your_firecrawl_api_key      # Fallback for SPAs (https://firecrawl.dev)
 
 # Optional - Demo chat widget on landing page
 NEXT_PUBLIC_DEMO_AGENT_ENDPOINT=https://your-demo-agent.agents.do-ai.run
@@ -124,6 +124,29 @@ NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY=your_demo_access_key
 2. Enter a website URL
 3. Wait for the agent to be created
 4. Start chatting!
+
+---
+
+## Embed on Your Website
+
+Add the chat widget to any website with a single script tag:
+
+```html
+<script
+  src="https://sharkbyte-support.vercel.app/widget.js"
+  data-agent-id="your-agent-id"
+  data-endpoint="https://your-agent.agents.do-ai.run"
+  data-access-key="your-access-key"
+  data-primary-color="#0080FF"
+  data-position="bottom-right"
+  async
+></script>
+```
+
+**Options:**
+- `data-primary-color` - Widget accent color (hex)
+- `data-position` - `bottom-right` or `bottom-left`
+- `data-welcome-message` - Custom greeting message
 
 ---
 
@@ -184,6 +207,7 @@ sharkbyte-support/
 - [Next.js](https://nextjs.org/)
 - [Tailwind CSS](https://tailwindcss.com/)
 - [shadcn/ui](https://ui.shadcn.com/)
+- [Framer Motion](https://www.framer.com/motion/)
 - [Vercel AI SDK](https://sdk.vercel.ai/)
 
 ---
