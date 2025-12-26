@@ -1,7 +1,8 @@
 /**
  * Demo Agent Auto-Creation
  *
- * Ensures the demo agent for sharkbyte-demo.vercel.app exists on startup.
+ * Ensures the demo agent exists for the deployment domain.
+ * Supports runtime domain detection with fallback chain.
  */
 
 import {
@@ -14,11 +15,12 @@ import {
   getDefaultInstruction,
   generateCrawlKBName,
 } from './digitalocean';
-import { DEMO_AGENT_CONFIG } from './config';
+import { APP_DOMAIN } from './config';
 
-let demoAgentPromise: Promise<DemoAgentResult> | null = null;
+// Cache for demo agent results per domain
+const demoAgentCache = new Map<string, Promise<DemoAgentResult>>();
 
-interface DemoAgentResult {
+export interface DemoAgentResult {
   agentId: string;
   endpoint: string;
   accessKey: string;
@@ -26,22 +28,46 @@ interface DemoAgentResult {
 }
 
 /**
- * Ensures the demo agent exists. Creates it if it doesn't.
- * Uses a singleton pattern to prevent duplicate creation attempts.
+ * Get the deployment domain with fallback chain:
+ * 1. Explicit domain parameter
+ * 2. APP_DOMAIN env var
+ * 3. VERCEL_PROJECT_PRODUCTION_URL (Vercel auto-set)
+ * 4. Default fallback
  */
-export async function ensureDemoAgent(): Promise<DemoAgentResult> {
-  // Return existing promise if already in progress
-  if (demoAgentPromise) {
-    return demoAgentPromise;
-  }
-
-  demoAgentPromise = createDemoAgentIfNeeded();
-  return demoAgentPromise;
+export function getDeploymentDomain(explicitDomain?: string): string {
+  return explicitDomain
+    || APP_DOMAIN
+    || process.env.VERCEL_PROJECT_PRODUCTION_URL
+    || 'sharkbyte-support.vercel.app';
 }
 
-async function createDemoAgentIfNeeded(): Promise<DemoAgentResult> {
-  const domain = DEMO_AGENT_CONFIG.DOMAIN;
+/**
+ * Ensures the demo agent exists for the given domain. Creates it if it doesn't.
+ * Uses a singleton pattern per domain to prevent duplicate creation attempts.
+ *
+ * @param domain - Optional domain override. Uses getDeploymentDomain() fallback if not provided.
+ */
+export async function ensureDemoAgent(domain?: string): Promise<DemoAgentResult> {
+  const resolvedDomain = getDeploymentDomain(domain);
 
+  // Return existing promise if already in progress for this domain
+  const existing = demoAgentCache.get(resolvedDomain);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = createDemoAgentIfNeeded(resolvedDomain);
+  demoAgentCache.set(resolvedDomain, promise);
+
+  // On failure, clear cache so it can be retried
+  promise.catch(() => {
+    demoAgentCache.delete(resolvedDomain);
+  });
+
+  return promise;
+}
+
+async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult> {
   console.log(`Checking for demo agent: ${domain}...`);
 
   try {
@@ -68,7 +94,7 @@ async function createDemoAgentIfNeeded(): Promise<DemoAgentResult> {
     // Create new demo agent with crawl KB
     console.log(`Creating demo agent for ${domain}...`);
 
-    const normalizedUrl = DEMO_AGENT_CONFIG.URL;
+    const normalizedUrl = `https://${domain}`;
 
     // Create crawl KB
     const crawlKBName = generateCrawlKBName(normalizedUrl);
@@ -88,7 +114,7 @@ async function createDemoAgentIfNeeded(): Promise<DemoAgentResult> {
     const allKBIds = [crawlKBId];
 
     // Create agent
-    const agentName = DEMO_AGENT_CONFIG.NAME;
+    const agentName = `Sammy - ${domain}`;
     console.log(`Creating agent: ${agentName}...`);
 
     const agentResponse = await createAgent({
@@ -121,20 +147,19 @@ async function createDemoAgentIfNeeded(): Promise<DemoAgentResult> {
     };
   } catch (error) {
     console.error('Failed to create demo agent:', error);
-    // Reset the promise so it can be retried
-    demoAgentPromise = null;
     throw error;
   }
 }
 
 /**
- * Get demo agent info without creating it
+ * Get demo agent info without creating it.
+ * @param domain - Optional domain override. Uses getDeploymentDomain() fallback if not provided.
  */
-export async function getDemoAgentInfo(): Promise<DemoAgentResult | null> {
-  const domain = DEMO_AGENT_CONFIG.DOMAIN;
+export async function getDemoAgentInfo(domain?: string): Promise<DemoAgentResult | null> {
+  const resolvedDomain = getDeploymentDomain(domain);
 
   try {
-    const existingAgent = await findAgentByDomain(domain);
+    const existingAgent = await findAgentByDomain(resolvedDomain);
 
     if (existingAgent && existingAgent.endpoint) {
       const keyResponse = await createAccessKey(existingAgent.uuid);

@@ -283,6 +283,82 @@ export async function getProjectId(): Promise<string> {
 }
 
 // ============================================
+// Database Discovery Functions
+// ============================================
+
+// Cache for discovered database ID
+let cachedDatabaseId: string | null = null;
+
+/**
+ * Discovers an existing database by looking at Knowledge Bases.
+ * Since DO doesn't have a direct "list databases" API, we look at
+ * existing KBs to find a database_id we can reuse.
+ */
+async function discoverExistingDatabase(): Promise<string | null> {
+  try {
+    const { knowledge_bases } = await listKnowledgeBases();
+
+    // Find a KB with a database_id
+    for (const kb of knowledge_bases) {
+      if (kb.database_id) {
+        console.log(`Found existing database from KB "${kb.name}": ${kb.database_id}`);
+        return kb.database_id;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.warn('Failed to discover existing database:', error);
+    return null;
+  }
+}
+
+/**
+ * Gets a database ID to use, with discovery fallback.
+ * Priority:
+ * 1. DO_DATABASE_ID env var (fastest)
+ * 2. In-memory cache
+ * 3. Discover from existing KBs
+ * 4. Return null (let auto-provisioning create one)
+ */
+export async function getDatabaseId(): Promise<string | null> {
+  // 1. Return env var if set
+  if (DO_CONFIG.DATABASE_ID) {
+    return DO_CONFIG.DATABASE_ID;
+  }
+
+  // 2. Return cached value
+  if (cachedDatabaseId) {
+    return cachedDatabaseId;
+  }
+
+  // 3. Try to discover from existing KBs
+  console.log('DO_DATABASE_ID not set, discovering from existing Knowledge Bases...');
+  const discovered = await discoverExistingDatabase();
+
+  if (discovered) {
+    cachedDatabaseId = discovered;
+    console.log(`✅ Using discovered database: ${discovered}`);
+    return discovered;
+  }
+
+  // 4. No existing database found - will auto-provision on first KB creation
+  console.log('No existing database found - will auto-provision on first KB creation');
+  return null;
+}
+
+/**
+ * Updates the cached database ID after a KB is created.
+ * This allows subsequent KB creations to reuse the same database.
+ */
+export function setCachedDatabaseId(databaseId: string): void {
+  if (databaseId && !cachedDatabaseId) {
+    cachedDatabaseId = databaseId;
+    console.log(`Cached database ID: ${databaseId}`);
+  }
+}
+
+// ============================================
 // Knowledge Base Functions
 // ============================================
 
@@ -340,21 +416,14 @@ export async function createKnowledgeBaseSmartCrawl(
     ],
   };
 
-  // Add database_id if provided (reuse existing database)
-  // Note: Only include database_id if explicitly provided via options
-  // If DO_CONFIG.DATABASE_ID is set but invalid, it will cause errors
-  // So we only use it if explicitly passed in options
-  const databaseId = options.databaseId;
+  // Add database_id with auto-discovery
+  // Priority: explicit option > env var > discovered from existing KBs > auto-provision
+  const databaseId = options.databaseId || await getDatabaseId();
   if (databaseId) {
     requestBody.database_id = databaseId;
-    console.log(`Using provided database_id: ${databaseId}`);
-  } else if (DO_CONFIG.DATABASE_ID) {
-    // Only use env DATABASE_ID if no option is provided
-    // This allows auto-provisioning if env var is not set
-    requestBody.database_id = DO_CONFIG.DATABASE_ID;
-    console.log(`Using DATABASE_ID from config: ${DO_CONFIG.DATABASE_ID}`);
+    console.log(`Using database_id: ${databaseId}`);
   } else {
-    console.log('No database_id provided - will auto-provision');
+    console.log('No database_id found - will auto-provision');
   }
 
   const response = await fetchWithRetry(
@@ -416,21 +485,14 @@ export async function createKnowledgeBase(
     ],
   };
 
-  // Add database_id if provided (reuse existing database)
-  // Note: Only include database_id if explicitly provided via options
-  // If DO_CONFIG.DATABASE_ID is set but invalid, it will cause errors
-  // So we only use it if explicitly passed in options
-  const databaseId = options.databaseId;
+  // Add database_id with auto-discovery
+  // Priority: explicit option > env var > discovered from existing KBs > auto-provision
+  const databaseId = options.databaseId || await getDatabaseId();
   if (databaseId) {
     requestBody.database_id = databaseId;
-    console.log(`Using provided database_id: ${databaseId}`);
-  } else if (DO_CONFIG.DATABASE_ID) {
-    // Only use env DATABASE_ID if no option is provided
-    // This allows auto-provisioning if env var is not set
-    requestBody.database_id = DO_CONFIG.DATABASE_ID;
-    console.log(`Using DATABASE_ID from config: ${DO_CONFIG.DATABASE_ID}`);
+    console.log(`Using database_id: ${databaseId}`);
   } else {
-    console.log('No database_id provided - will auto-provision');
+    console.log('No database_id found - will auto-provision');
   }
 
   const response = await fetchWithRetry(
@@ -660,7 +722,7 @@ export async function waitForDatabaseReady(
   kbId: string,
   maxWaitMs = 120000,
   pollIntervalMs = 5000
-): Promise<void> {
+): Promise<string> {
   const startTime = Date.now();
 
   while (Date.now() - startTime < maxWaitMs) {
@@ -668,8 +730,11 @@ export async function waitForDatabaseReady(
 
     // Check if database_id is present (database provisioned/associated)
     if (kb.knowledge_base.database_id) {
-      console.log(`Database ready: ${kb.knowledge_base.database_id}`);
-      return;
+      const dbId = kb.knowledge_base.database_id;
+      console.log(`Database ready: ${dbId}`);
+      // Cache the database ID for future use
+      setCachedDatabaseId(dbId);
+      return dbId;
     }
 
     console.log('Waiting for database provisioning...');

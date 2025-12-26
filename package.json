@@ -4,11 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
+    "prebuild": "npx tsx scripts/init-deployment.ts || true",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "cleanup": "npx tsx scripts/cleanup-do.ts",
-    "create-agent": "npx tsx scripts/create-first-agent.ts"
+    "create-agent": "npx tsx scripts/create-first-agent.ts",
+    "init": "npx tsx scripts/init-deployment.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.86",
