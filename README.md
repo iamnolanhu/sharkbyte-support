@@ -100,14 +100,14 @@ Create a `.env.local` file:
 ```env
 # Required
 DO_API_TOKEN=your_digitalocean_api_token      # https://cloud.digitalocean.com/account/api/tokens
-DO_PROJECT_ID=your_project_id                  # Your DigitalOcean project UUID
 
 # DigitalOcean Gradient AI
 DO_REGION=tor1                                 # Only tor1 supports gen-ai agents
 DO_EMBEDDING_MODEL_UUID=22653204-79ed-11ef-bf8f-4e013e2ddde4  # gte-large (default)
 DO_LLM_MODEL_UUID=18bc9b8f-73c5-11f0-b074-4e013e2ddde4        # GPT-oss-120b (default)
 
-# Optional
+# Optional (auto-discovered if not set)
+DO_PROJECT_ID=your_project_id                 # Auto-creates "SharkByte Support" project if not set
 DO_DATABASE_ID=your_database_id               # Reuse existing vector database
 FIRECRAWL_API_KEY=your_firecrawl_api_key      # Fallback for SPAs (https://firecrawl.dev)
 

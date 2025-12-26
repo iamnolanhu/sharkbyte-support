@@ -117,6 +117,172 @@ async function fetchWithRetry(
 }
 
 // ============================================
+// Project Functions (Auto-Initialize)
+// ============================================
+
+interface DOProject {
+  id: string;
+  owner_uuid: string;
+  owner_id: number;
+  name: string;
+  description: string;
+  purpose: string;
+  environment: string;
+  created_at: string;
+  updated_at: string;
+  is_default: boolean;
+}
+
+interface ListProjectsResponse {
+  projects: DOProject[];
+}
+
+interface CreateProjectResponse {
+  project: DOProject;
+}
+
+// Module-level cache for project ID (persists for request lifecycle)
+let cachedProjectId: string | null = null;
+
+/**
+ * List all projects in the DigitalOcean account
+ */
+async function listProjects(): Promise<DOProject[]> {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/projects`, {
+    headers: getHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to list projects: ${JSON.stringify(error)}`);
+  }
+
+  const data: ListProjectsResponse = await response.json();
+  return data.projects || [];
+}
+
+/**
+ * Create a new DigitalOcean project
+ */
+async function createProject(name: string): Promise<DOProject> {
+  const response = await fetch(`${DO_CONFIG.API_BASE}/projects`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      name,
+      description: 'AI-powered customer support agents',
+      purpose: 'Service or API',
+      environment: 'Production',
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to create project: ${JSON.stringify(error)}`);
+  }
+
+  const data: CreateProjectResponse = await response.json();
+  return data.project;
+}
+
+/**
+ * Persist project ID to .env.local for local development
+ */
+function persistProjectIdToFile(projectId: string): boolean {
+  // Only attempt file operations in Node.js environment (not Edge runtime)
+  if (typeof window !== 'undefined') return false;
+
+  try {
+    // Dynamic import for Node.js fs module
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs');
+    const envPath = '.env.local';
+
+    // Check if already in .env.local
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      if (content.includes('DO_PROJECT_ID=')) {
+        return false; // Already set
+      }
+    }
+
+    // Append to .env.local
+    fs.appendFileSync(envPath, `\n# Auto-discovered by SharkByte\nDO_PROJECT_ID=${projectId}\n`);
+    console.log(`✅ Saved DO_PROJECT_ID to ${envPath}`);
+    return true;
+  } catch {
+    // File system not available (Edge runtime, read-only, etc.)
+    return false;
+  }
+}
+
+/**
+ * Show instructions for Vercel/production deployments
+ */
+function showVercelInstructions(projectId: string): void {
+  console.log('\n' + '='.repeat(60));
+  console.log('🔧 SETUP TIP: Add this to your Vercel environment variables:');
+  console.log(`   DO_PROJECT_ID=${projectId}`);
+  console.log('   This will prevent re-discovery on every cold start.');
+  console.log('='.repeat(60) + '\n');
+}
+
+/**
+ * Find or create a project by name
+ */
+async function getOrCreateProject(name: string): Promise<string> {
+  // Check for existing project
+  const projects = await listProjects();
+  const existing = projects.find((p) => p.name === name);
+
+  if (existing) {
+    console.log(`Found existing project: "${name}" (${existing.id})`);
+    return existing.id;
+  }
+
+  // Create new project
+  console.log(`Creating new project: "${name}"...`);
+  const newProject = await createProject(name);
+  console.log(`✅ Created project: "${name}" (${newProject.id})`);
+  return newProject.id;
+}
+
+/**
+ * Get project ID - uses env var if set, otherwise auto-discovers/creates
+ * Caches result for request lifecycle and persists to .env.local when possible
+ */
+export async function getProjectId(): Promise<string> {
+  // 1. Return env var if set (fastest path)
+  if (DO_CONFIG.PROJECT_ID) {
+    return DO_CONFIG.PROJECT_ID;
+  }
+
+  // 2. Return in-memory cache if available (for same request)
+  if (cachedProjectId) {
+    return cachedProjectId;
+  }
+
+  // 3. Find or create project
+  console.log(`DO_PROJECT_ID not set, auto-discovering "${DO_CONFIG.DEFAULT_PROJECT_NAME}" project...`);
+  cachedProjectId = await getOrCreateProject(DO_CONFIG.DEFAULT_PROJECT_NAME);
+
+  // 4. Try to persist locally
+  const isVercel = process.env.VERCEL === '1';
+  if (!isVercel) {
+    const persisted = persistProjectIdToFile(cachedProjectId);
+    if (!persisted) {
+      // Couldn't persist to file, show instructions
+      showVercelInstructions(cachedProjectId);
+    }
+  } else {
+    // On Vercel, log instructions
+    showVercelInstructions(cachedProjectId);
+  }
+
+  return cachedProjectId;
+}
+
+// ============================================
 // Knowledge Base Functions
 // ============================================
 
@@ -152,11 +318,14 @@ export async function createKnowledgeBaseSmartCrawl(
   // Navigation links are included for better link discovery
   console.log(`Creating KB with DOMAIN crawl for ${baseUrl}`);
 
+  // Get project ID (auto-discovers/creates if not set)
+  const projectId = await getProjectId();
+
   // Build request body
   const requestBody: Record<string, unknown> = {
     name: options.name,
     embedding_model_uuid: DO_CONFIG.DEFAULT_EMBEDDING_MODEL_UUID,
-    project_id: DO_CONFIG.PROJECT_ID,
+    project_id: projectId,
     region: DO_CONFIG.DEFAULT_REGION,
     datasources: [
       {
@@ -225,11 +394,14 @@ export async function createKnowledgeBaseSmartCrawl(
 export async function createKnowledgeBase(
   options: CreateKBOptions
 ): Promise<CreateKBResponse> {
+  // Get project ID (auto-discovers/creates if not set)
+  const projectId = await getProjectId();
+
   // Build request body, optionally including database_id
   const requestBody: Record<string, unknown> = {
     name: options.name,
     embedding_model_uuid: DO_CONFIG.DEFAULT_EMBEDDING_MODEL_UUID,
-    project_id: DO_CONFIG.PROJECT_ID,
+    project_id: projectId,
     region: DO_CONFIG.DEFAULT_REGION,
     datasources: [
       {

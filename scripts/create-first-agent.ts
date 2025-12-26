@@ -6,10 +6,10 @@
  */
 
 import 'dotenv/config';
+import { getProjectId } from '../src/lib/digitalocean';
 
 const DO_API_BASE = 'https://api.digitalocean.com/v2';
 const DO_API_TOKEN = process.env.DO_API_TOKEN;
-const DO_PROJECT_ID = process.env.DO_PROJECT_ID;
 const DO_REGION = process.env.DO_REGION || 'tor1';
 const DO_DATABASE_ID = process.env.DO_DATABASE_ID;
 const DO_EMBEDDING_MODEL_UUID = process.env.DO_EMBEDDING_MODEL_UUID || '22653204-79ed-11ef-bf8f-4e013e2ddde4';
@@ -26,11 +26,6 @@ const EMBED_MEDIA = false;
 
 if (!DO_API_TOKEN) {
   console.error('Error: DO_API_TOKEN environment variable is required');
-  process.exit(1);
-}
-
-if (!DO_PROJECT_ID) {
-  console.error('Error: DO_PROJECT_ID environment variable is required');
   process.exit(1);
 }
 
@@ -76,10 +71,13 @@ async function createCrawlKnowledgeBase(name: string, seedUrl: string): Promise<
     ? { base_url: `${seedUrl}/sitemap.xml`, crawling_option: 'SCOPED' }
     : { base_url: seedUrl, crawling_option: 'DOMAIN' };
 
+  // Get project ID (auto-discovers/creates if not set)
+  const projectId = await getProjectId();
+
   const requestBody: Record<string, unknown> = {
     name,
     embedding_model_uuid: DO_EMBEDDING_MODEL_UUID,
-    project_id: DO_PROJECT_ID,
+    project_id: projectId,
     region: DO_REGION,
     datasources: [
       {
@@ -114,10 +112,13 @@ async function createCrawlKnowledgeBase(name: string, seedUrl: string): Promise<
 
 // Create empty KB (for uploads/structured)
 async function createEmptyKnowledgeBase(name: string): Promise<{ uuid: string }> {
+  // Get project ID (auto-discovers/creates if not set)
+  const projectId = await getProjectId();
+
   const requestBody: Record<string, unknown> = {
     name,
     embedding_model_uuid: DO_EMBEDDING_MODEL_UUID,
-    project_id: DO_PROJECT_ID,
+    project_id: projectId,
     region: DO_REGION,
     datasources: [],
   };

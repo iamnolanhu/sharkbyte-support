@@ -20,14 +20,11 @@ export const DO_CONFIG = {
   DEFAULT_LLM_MODEL_UUID:
     process.env.DO_LLM_MODEL_UUID || '18bc9b8f-73c5-11f0-b074-4e013e2ddde4',
 
-  // Project ID (required)
-  get PROJECT_ID() {
-    const projectId = process.env.DO_PROJECT_ID;
-    if (!projectId) {
-      throw new Error('DO_PROJECT_ID environment variable is not set');
-    }
-    return projectId;
-  },
+  // Project ID (optional - will auto-discover/create "SharkByte Support" project if not set)
+  PROJECT_ID: process.env.DO_PROJECT_ID,
+
+  // Default project name for auto-creation
+  DEFAULT_PROJECT_NAME: 'SharkByte Support',
 
   // Database ID for knowledge bases (optional - will auto-provision if not set)
   DATABASE_ID: process.env.DO_DATABASE_ID,
