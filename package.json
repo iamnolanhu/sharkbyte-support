@@ -24,8 +24,7 @@
     "openai": "^4.77.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
+    "streamdown": "^1.6.10",
     "tailwind-merge": "^2.6.0",
     "uuid": "^11.0.3"
   },

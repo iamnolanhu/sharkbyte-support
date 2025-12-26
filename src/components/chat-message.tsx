@@ -2,8 +2,9 @@
 
 import { motion } from 'framer-motion';
 import { User } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Streamdown } from 'streamdown';
+import { useTheme } from 'next-themes';
+import type { BundledTheme } from 'shiki';
 import { cn } from '@/lib/utils';
 import { SammyAvatar } from './sammy-avatar';
 import type { ChatMessage as ChatMessageType } from '@/types';
@@ -15,6 +16,13 @@ interface ChatMessageProps {
 
 export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
   const isUser = message.role === 'user';
+  const { theme } = useTheme();
+
+  // Use same theme for both light/dark slots to bypass prefers-color-scheme issues
+  // This ensures the correct theme is always used regardless of OS preference
+  const shikiTheme: [BundledTheme, BundledTheme] = theme === 'light'
+    ? ['github-light', 'github-light']
+    : ['dracula', 'dracula'];
 
   return (
     <motion.div
@@ -54,43 +62,9 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
           </p>
         ) : (
           <div className="text-sm leading-relaxed">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                ul: ({ children }) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
-                ol: ({ children }) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
-                li: ({ children }) => <li className="mb-1">{children}</li>,
-                code: ({ children }) => (
-                  <code className="bg-muted px-1 py-0.5 rounded text-xs">{children}</code>
-                ),
-                pre: ({ children }) => (
-                  <pre className="bg-muted p-2 rounded overflow-x-auto text-xs my-2">{children}</pre>
-                ),
-                strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                em: ({ children }) => <em className="italic">{children}</em>,
-                a: ({ href, children }) => (
-                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                    {children}
-                  </a>
-                ),
-                h1: ({ children }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
-                h2: ({ children }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
-                h3: ({ children }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
-                blockquote: ({ children }) => (
-                  <blockquote className="border-l-2 border-muted-foreground pl-3 my-2 italic">{children}</blockquote>
-                ),
-              }}
-            >
+            <Streamdown shikiTheme={shikiTheme} isAnimating={isStreaming}>
               {message.content}
-            </ReactMarkdown>
-            {isStreaming && (
-              <motion.span
-                animate={{ opacity: [1, 0] }}
-                transition={{ duration: 0.5, repeat: Infinity }}
-                className="inline-block w-2 h-4 ml-1 bg-current"
-              />
-            )}
+            </Streamdown>
           </div>
         )}
       </div>

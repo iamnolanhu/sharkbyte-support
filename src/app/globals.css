@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @import "../styles/digitalocean-variables.css";
 
+/* Streamdown - AI-optimized markdown renderer */
+@source "../node_modules/streamdown/dist/*.js";
+
 /* ============================================
    TAILWIND V4 THEME CONFIGURATION
    ============================================ */
@@ -179,4 +182,53 @@ body {
     hsl(217 60% 8%) 0%,
     hsl(217 44% 18%) 100%
   );
+}
+
+/* ============================================
+   STREAMDOWN - OCEAN THEME CUSTOMIZATIONS
+   ============================================ */
+
+.ocean [data-streamdown="code-block"] {
+  background-color: rgb(22 78 99 / 0.5); /* cyan-900/50 */
+  border-color: rgb(6 182 212 / 0.3); /* cyan-500/30 */
+}
+
+.ocean [data-streamdown="inline-code"] {
+  background-color: rgb(22 78 99 / 0.5); /* cyan-900/50 */
+}
+
+.ocean [data-streamdown="link"] {
+  color: rgb(103 232 249); /* cyan-300 */
+}
+
+.ocean [data-streamdown="blockquote"] {
+  border-left-color: rgb(6 182 212); /* cyan-500 */
+}
+
+/* Smooth rendering transitions for streaming content */
+[data-streamdown] {
+  transition: height 0.15s ease-out;
+}
+
+[data-streamdown="code-block"] {
+  transition: opacity 0.1s ease-in, height 0.15s ease-out;
+}
+
+/* Fix: Force Shiki dark theme when using class-based dark mode */
+/* Shiki dual-theme uses prefers-color-scheme, but we use class-based theming */
+.dark .shiki,
+.dark .shiki span,
+.ocean .shiki,
+.ocean .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+}
+
+/* Also handle Streamdown's code blocks which wrap Shiki */
+.dark [data-streamdown="code-block"] .shiki,
+.dark [data-streamdown="code-block"] .shiki span,
+.ocean [data-streamdown="code-block"] .shiki,
+.ocean [data-streamdown="code-block"] .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
 }

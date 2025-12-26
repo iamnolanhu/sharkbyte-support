@@ -1,6 +1,17 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { Streamdown } from 'streamdown';
+import type { BundledTheme } from 'shiki';
+import {
+  type Theme,
+  themes,
+  getAccentColor,
+  CHAT_CONSTANTS,
+  OceanDecorationsInline,
+  getOceanDecorationsStyles,
+  ChatFooter,
+} from './chat';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -17,59 +28,17 @@ interface EmbedChatWidgetProps {
   welcomeMessage?: string;
 }
 
-type Theme = 'light' | 'dark' | 'ocean';
-
-const themes = {
-  light: {
-    bg: '#ffffff',
-    bgGradient: '#ffffff',
-    bgSecondary: '#f5f5f5',
-    bgBubble: '#ffffff',
-    text: '#333333',
-    textMuted: '#666666',
-    border: '#e5e5e5',
-    inputBg: '#f9f9f9',
-    inputBorder: '#dddddd',
-    accent: '#0080FF',
-    loadingDot: '#999999',
-  },
-  dark: {
-    bg: '#1a1a1a',
-    bgGradient: '#1a1a1a',
-    bgSecondary: '#262626',
-    bgBubble: '#333333',
-    text: '#f2f2f2',
-    textMuted: '#999999',
-    border: '#333333',
-    inputBg: '#262626',
-    inputBorder: '#444444',
-    accent: '#0080FF',
-    loadingDot: '#666666',
-  },
-  ocean: {
-    bg: '#0a1628',
-    bgGradient: 'linear-gradient(180deg, #0a1628 0%, #1a365d 100%)',
-    bgSecondary: '#1e3a5f',
-    bgBubble: '#1e3a5f',
-    text: '#e0f2fe',
-    textMuted: '#7dd3fc',
-    border: 'rgba(6, 182, 212, 0.2)',
-    inputBg: '#0a1628',
-    inputBorder: 'rgba(6, 182, 212, 0.3)',
-    accent: '#0891b2',
-    loadingDot: '#22d3ee',
-  },
-};
-
 export function EmbedChatWidget({
   endpoint,
   accessKey,
   agentId,
-  agentName = 'Sammy',
-  primaryColor = '#0080FF',
+  agentName = CHAT_CONSTANTS.DEFAULT_AGENT_NAME,
+  primaryColor = CHAT_CONSTANTS.DEFAULT_PRIMARY_COLOR,
   position = 'bottom-right',
-  welcomeMessage = "Hi! How can I help you today?",
+  welcomeMessage,
 }: EmbedChatWidgetProps) {
+  // Compute default welcome message with agent name
+  const defaultWelcome = welcomeMessage || CHAT_CONSTANTS.getDefaultWelcome(agentName);
   const [isOpen, setIsOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>('light');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -78,6 +47,12 @@ export function EmbedChatWidget({
   const [streamingContent, setStreamingContent] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Use same theme for both light/dark slots to bypass prefers-color-scheme issues
+  // This ensures the correct theme is always used regardless of OS preference
+  const shikiTheme: [BundledTheme, BundledTheme] = theme === 'light'
+    ? ['github-light', 'github-light']
+    : ['dracula', 'dracula'];
 
   // Detect system preference on mount
   useEffect(() => {
@@ -199,7 +174,8 @@ export function EmbedChatWidget({
   };
 
   const colors = themes[theme];
-  const accentColor = theme === 'ocean' ? colors.accent : primaryColor;
+  const accentColor = getAccentColor(theme, primaryColor);
+  const isOcean = theme === 'ocean';
 
   // Inline SVG icons
   const CloseIcon = () => (
@@ -281,6 +257,7 @@ export function EmbedChatWidget({
         .bounce-1 { animation: bounce 0.6s infinite; animation-delay: 0ms; }
         .bounce-2 { animation: bounce 0.6s infinite; animation-delay: 150ms; }
         .bounce-3 { animation: bounce 0.6s infinite; animation-delay: 300ms; }
+        ${getOceanDecorationsStyles()}
       `}</style>
 
       <div
@@ -329,7 +306,7 @@ export function EmbedChatWidget({
                 }}
               >
                 <img
-                  src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+                  src={CHAT_CONSTANTS.AVATAR_URL_ABSOLUTE}
                   alt={agentName}
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
@@ -389,8 +366,12 @@ export function EmbedChatWidget({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '12px',
+                position: 'relative',
               }}
             >
+              {/* Ocean theme decorations */}
+              {isOcean && <OceanDecorationsInline />}
+
               {/* Welcome message */}
               {messages.length === 0 && !streamingContent && (
                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -423,7 +404,7 @@ export function EmbedChatWidget({
                       boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                     }}
                   >
-                    {welcomeMessage}
+                    {defaultWelcome}
                   </div>
                 </div>
               )}
@@ -466,13 +447,16 @@ export function EmbedChatWidget({
                       maxWidth: '80%',
                       fontSize: '14px',
                       boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                      whiteSpace: 'pre-wrap' as const,
                       ...(message.role === 'user'
-                        ? { backgroundColor: accentColor, color: '#fff' }
+                        ? { backgroundColor: accentColor, color: '#fff', whiteSpace: 'pre-wrap' as const }
                         : { backgroundColor: colors.bgBubble, color: colors.text }),
                     }}
                   >
-                    {message.content}
+                    {message.role === 'user' ? (
+                      message.content
+                    ) : (
+                      <Streamdown shikiTheme={shikiTheme}>{message.content}</Streamdown>
+                    )}
                   </div>
                 </div>
               ))}
@@ -507,20 +491,11 @@ export function EmbedChatWidget({
                       fontSize: '14px',
                       color: colors.text,
                       boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                      whiteSpace: 'pre-wrap' as const,
                     }}
                   >
-                    {streamingContent}
-                    <span
-                      style={{
-                        display: 'inline-block',
-                        width: '6px',
-                        height: '16px',
-                        backgroundColor: colors.loadingDot,
-                        marginLeft: '2px',
-                        animation: 'bounce 0.6s infinite',
-                      }}
-                    />
+                    <Streamdown shikiTheme={shikiTheme} isAnimating={true}>
+                      {streamingContent}
+                    </Streamdown>
                   </div>
                 </div>
               )}
@@ -619,24 +594,7 @@ export function EmbedChatWidget({
                   {isLoading ? <LoaderIcon /> : <SendIcon />}
                 </button>
               </div>
-              <div
-                style={{
-                  textAlign: 'center',
-                  fontSize: '10px',
-                  color: colors.textMuted,
-                  marginTop: '8px',
-                }}
-              >
-                Powered by{' '}
-                <a
-                  href="https://sharkbyte-support.vercel.app"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: colors.textMuted, textDecoration: 'none' }}
-                >
-                  SharkByte
-                </a>
-              </div>
+              <ChatFooter textColor={colors.textMuted} />
             </div>
           </div>
         ) : (
@@ -657,7 +615,7 @@ export function EmbedChatWidget({
             onMouseOut={(e) => (e.currentTarget.style.transform = 'scale(1)')}
           >
             <img
-              src="https://sharkbyte-support.vercel.app/sammy/transparent/sammy-front-transparent.png"
+              src={CHAT_CONSTANTS.AVATAR_URL_ABSOLUTE}
               alt={`Chat with ${agentName}`}
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />

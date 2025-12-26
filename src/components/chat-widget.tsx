@@ -5,26 +5,16 @@ import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Send, Loader2, Maximize2, Minimize2, Sun, Moon, Waves } from 'lucide-react';
 import { useTheme } from 'next-themes';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-
-// Mini fish SVG for ocean theme
-function FishSvg({ size, opacity, direction }: { size: number; opacity: number; direction: 'left' | 'right' }) {
-  return (
-    <svg
-      width={size}
-      height={size * 0.6}
-      viewBox="0 0 24 14"
-      style={{ transform: direction === 'right' ? 'scaleX(-1)' : 'none' }}
-    >
-      <path
-        d="M23 7c-3-4-6-6-11-6C7 1 4 4 1 7c3 3 6 6 11 6 5 0 8-2 11-6z"
-        fill={`rgba(0, 175, 206, ${opacity})`}
-      />
-      <circle cx="6" cy="7" r="1.5" fill={`rgba(255, 255, 255, ${opacity * 0.8})`} />
-    </svg>
-  );
-}
+import { Streamdown } from 'streamdown';
+import type { BundledTheme } from 'shiki';
+import {
+  CHAT_CONSTANTS,
+  getTailwindThemeClasses,
+  getAccentColor,
+  FishSvg,
+  OceanDecorations,
+  ChatFooter,
+} from './chat';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -44,9 +34,9 @@ interface ChatWidgetProps {
 export function ChatWidget({
   endpoint,
   accessKey,
-  agentName = 'Sammy',
-  avatarUrl = '/sammy/transparent/sammy-avatar-transparent.png',
-  primaryColor = '#0080FF',
+  agentName = CHAT_CONSTANTS.DEFAULT_AGENT_NAME,
+  avatarUrl = CHAT_CONSTANTS.AVATAR_URL,
+  primaryColor = CHAT_CONSTANTS.DEFAULT_PRIMARY_COLOR,
   position = 'bottom-right',
   welcomeMessage,
 }: ChatWidgetProps) {
@@ -62,7 +52,13 @@ export function ChatWidget({
 
   const { theme, setTheme } = useTheme();
 
-  const defaultWelcome = welcomeMessage || `Hi! I'm ${agentName}. How can I help you today?`;
+  // Use same theme for both light/dark slots to bypass prefers-color-scheme issues
+  // This ensures the correct theme is always used regardless of OS preference
+  const shikiTheme: [BundledTheme, BundledTheme] = theme === 'light'
+    ? ['github-light', 'github-light']
+    : ['dracula', 'dracula'];
+
+  const defaultWelcome = welcomeMessage || CHAT_CONSTANTS.getDefaultWelcome(agentName);
 
   // Prevent hydration mismatch
   useEffect(() => {
@@ -167,21 +163,9 @@ export function ChatWidget({
     ? 'fixed inset-4 sm:inset-6 w-auto h-auto'
     : 'w-[340px] sm:w-[380px] h-[500px]';
 
-  // Theme-aware colors
-  const isOcean = mounted && theme === 'ocean';
-  const isDark = mounted && (theme === 'dark' || theme === 'ocean');
-
-  const themeColors = {
-    bg: isOcean ? 'bg-[#0a1628]' : isDark ? 'bg-gray-900' : 'bg-white',
-    bgSecondary: isOcean ? 'bg-[#1e3a5f]' : isDark ? 'bg-gray-800' : 'bg-gray-50',
-    bgBubble: isOcean ? 'bg-[#1e3a5f]' : isDark ? 'bg-gray-700' : 'bg-white',
-    text: isOcean ? 'text-cyan-50' : isDark ? 'text-gray-200' : 'text-gray-800',
-    textMuted: isOcean ? 'text-cyan-200/60' : isDark ? 'text-gray-400' : 'text-gray-400',
-    border: isOcean ? 'border-cyan-500/20' : isDark ? 'border-gray-700' : 'border-gray-200',
-    inputBg: isOcean ? 'bg-[#0a1628]' : isDark ? 'bg-gray-800' : 'bg-gray-50',
-    inputBorder: isOcean ? 'border-cyan-500/30' : isDark ? 'border-gray-600' : 'border-gray-200',
-    accent: isOcean ? '#0891b2' : primaryColor,
-  };
+  // Theme-aware colors using shared function
+  const themeColors = getTailwindThemeClasses(theme as 'light' | 'dark' | 'ocean', mounted);
+  const accentColor = getAccentColor(theme as 'light' | 'dark' | 'ocean', primaryColor);
 
   const ThemeIcon = () => {
     if (!mounted) return <Sun className="w-4 h-4 text-white" />;
@@ -204,13 +188,13 @@ export function ChatWidget({
             className={`${maximizedClasses} ${themeColors.bg} rounded-2xl shadow-2xl flex flex-col overflow-hidden ${themeColors.border} border`}
             style={{
               boxShadow: `0 10px 40px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.05)`,
-              ...(isOcean ? { background: 'linear-gradient(180deg, #0a1628 0%, #1a365d 100%)' } : {}),
+              ...(themeColors.isOcean ? { background: 'linear-gradient(180deg, #0a1628 0%, #1a365d 100%)' } : {}),
             }}
           >
             {/* Header */}
             <div
               className={`px-4 py-3 flex items-center gap-3 ${themeColors.border} border-b`}
-              style={{ backgroundColor: themeColors.accent }}
+              style={{ backgroundColor: accentColor }}
             >
               <div className="w-10 h-10 rounded-full bg-white/20 p-1 flex-shrink-0">
                 <Image
@@ -260,52 +244,7 @@ export function ChatWidget({
             {/* Messages */}
             <div className={`flex-1 overflow-y-auto p-4 space-y-4 ${themeColors.bgSecondary} relative`}>
               {/* Ocean theme decorations - subtle bubbles and fish */}
-              {isOcean && (
-                <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                  {/* Mini bubbles */}
-                  {[...Array(6)].map((_, i) => (
-                    <motion.div
-                      key={`bubble-${i}`}
-                      className="absolute rounded-full"
-                      style={{
-                        width: 4 + (i % 3) * 2,
-                        height: 4 + (i % 3) * 2,
-                        left: `${15 + i * 15}%`,
-                        bottom: '-5%',
-                        background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2), rgba(0,175,206,0.1))`,
-                      }}
-                      animate={{
-                        y: [0, -400],
-                        opacity: [0, 0.15, 0.15, 0],
-                      }}
-                      transition={{
-                        duration: 8 + i * 2,
-                        repeat: Infinity,
-                        delay: i * 1.5,
-                        ease: 'easeOut',
-                      }}
-                    />
-                  ))}
-                  {/* Mini fish */}
-                  {[0, 1].map((i) => (
-                    <motion.div
-                      key={`fish-${i}`}
-                      className="absolute"
-                      style={{ top: `${30 + i * 30}%` }}
-                      initial={{ x: i === 0 ? '-20px' : '100%' }}
-                      animate={{ x: i === 0 ? '100%' : '-20px' }}
-                      transition={{
-                        duration: 15 + i * 5,
-                        repeat: Infinity,
-                        delay: i * 8,
-                        ease: 'linear',
-                      }}
-                    >
-                      <FishSvg size={12} opacity={0.1} direction={i === 0 ? 'right' : 'left'} />
-                    </motion.div>
-                  ))}
-                </div>
-              )}
+              {themeColors.isOcean && <OceanDecorations />}
 
               {/* Welcome message */}
               {messages.length === 0 && !streamingContent && (
@@ -348,48 +287,13 @@ export function ChatWidget({
                         ? 'text-white rounded-tr-sm'
                         : `${themeColors.bgBubble} ${themeColors.text} rounded-tl-sm`
                     }`}
-                    style={message.role === 'user' ? { backgroundColor: themeColors.accent } : {}}
+                    style={message.role === 'user' ? { backgroundColor: accentColor } : {}}
                   >
                     {message.role === 'user' ? (
                       <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                     ) : (
-                      <div className="text-sm chat-markdown">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                            ul: ({ children }) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
-                            ol: ({ children }) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
-                            li: ({ children }) => <li className="mb-1">{children}</li>,
-                            code: ({ children }) => (
-                              <code className={`${isOcean ? 'bg-cyan-900/50' : isDark ? 'bg-gray-600' : 'bg-gray-200'} px-1 py-0.5 rounded text-xs`}>
-                                {children}
-                              </code>
-                            ),
-                            pre: ({ children }) => (
-                              <pre className={`${isOcean ? 'bg-cyan-900/50' : isDark ? 'bg-gray-600' : 'bg-gray-200'} p-2 rounded overflow-x-auto text-xs my-2`}>
-                                {children}
-                              </pre>
-                            ),
-                            strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                            em: ({ children }) => <em className="italic">{children}</em>,
-                            a: ({ href, children }) => (
-                              <a href={href} target="_blank" rel="noopener noreferrer" className={`${isOcean ? 'text-cyan-300' : 'text-blue-500'} hover:underline`}>
-                                {children}
-                              </a>
-                            ),
-                            h1: ({ children }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
-                            h2: ({ children }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
-                            h3: ({ children }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
-                            blockquote: ({ children }) => (
-                              <blockquote className={`border-l-2 ${isOcean ? 'border-cyan-500' : 'border-gray-400'} pl-3 my-2 italic`}>
-                                {children}
-                              </blockquote>
-                            ),
-                          }}
-                        >
-                          {message.content}
-                        </ReactMarkdown>
+                      <div className="text-sm">
+                        <Streamdown shikiTheme={shikiTheme}>{message.content}</Streamdown>
                       </div>
                     )}
                   </div>
@@ -409,36 +313,10 @@ export function ChatWidget({
                     />
                   </div>
                   <div className={`${themeColors.bgBubble} rounded-2xl rounded-tl-sm px-4 py-2 max-w-[80%] shadow-sm`}>
-                    <div className={`text-sm ${themeColors.text} chat-markdown`}>
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                          ul: ({ children }) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
-                          ol: ({ children }) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
-                          li: ({ children }) => <li className="mb-1">{children}</li>,
-                          code: ({ children }) => (
-                            <code className={`${isOcean ? 'bg-cyan-900/50' : isDark ? 'bg-gray-600' : 'bg-gray-200'} px-1 py-0.5 rounded text-xs`}>
-                              {children}
-                            </code>
-                          ),
-                          pre: ({ children }) => (
-                            <pre className={`${isOcean ? 'bg-cyan-900/50' : isDark ? 'bg-gray-600' : 'bg-gray-200'} p-2 rounded overflow-x-auto text-xs my-2`}>
-                              {children}
-                            </pre>
-                          ),
-                          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                          em: ({ children }) => <em className="italic">{children}</em>,
-                          a: ({ href, children }) => (
-                            <a href={href} target="_blank" rel="noopener noreferrer" className={`${isOcean ? 'text-cyan-300' : 'text-blue-500'} hover:underline`}>
-                              {children}
-                            </a>
-                          ),
-                        }}
-                      >
+                    <div className={`text-sm ${themeColors.text}`}>
+                      <Streamdown shikiTheme={shikiTheme} isAnimating={true}>
                         {streamingContent}
-                      </ReactMarkdown>
-                      <span className={`inline-block w-1.5 h-4 ${isOcean ? 'bg-cyan-400' : 'bg-gray-400'} ml-0.5 animate-pulse`} />
+                      </Streamdown>
                     </div>
                   </div>
                 </div>
@@ -458,9 +336,9 @@ export function ChatWidget({
                   </div>
                   <div className={`${themeColors.bgBubble} rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm`}>
                     <div className="flex gap-1">
-                      <span className={`w-2 h-2 ${isOcean ? 'bg-cyan-400' : 'bg-gray-400'} rounded-full animate-bounce`} style={{ animationDelay: '0ms' }} />
-                      <span className={`w-2 h-2 ${isOcean ? 'bg-cyan-400' : 'bg-gray-400'} rounded-full animate-bounce`} style={{ animationDelay: '150ms' }} />
-                      <span className={`w-2 h-2 ${isOcean ? 'bg-cyan-400' : 'bg-gray-400'} rounded-full animate-bounce`} style={{ animationDelay: '300ms' }} />
+                      <span className={`w-2 h-2 ${themeColors.isOcean ? 'bg-cyan-400' : 'bg-gray-400'} rounded-full animate-bounce`} style={{ animationDelay: '0ms' }} />
+                      <span className={`w-2 h-2 ${themeColors.isOcean ? 'bg-cyan-400' : 'bg-gray-400'} rounded-full animate-bounce`} style={{ animationDelay: '150ms' }} />
+                      <span className={`w-2 h-2 ${themeColors.isOcean ? 'bg-cyan-400' : 'bg-gray-400'} rounded-full animate-bounce`} style={{ animationDelay: '300ms' }} />
                     </div>
                   </div>
                 </div>
@@ -479,7 +357,7 @@ export function ChatWidget({
                   onKeyDown={handleKeyDown}
                   placeholder="Type a message..."
                   rows={1}
-                  className={`flex-1 resize-none rounded-xl border ${themeColors.inputBorder} ${themeColors.inputBg} px-4 py-2.5 text-sm focus:outline-none focus:ring-2 ${isOcean ? 'focus:ring-cyan-500 text-cyan-50 placeholder:text-cyan-200/40' : 'focus:ring-blue-500 text-inherit placeholder:text-gray-400'}`}
+                  className={`flex-1 resize-none rounded-xl border ${themeColors.inputBorder} ${themeColors.inputBg} px-4 py-2.5 text-sm focus:outline-none focus:ring-2 ${themeColors.isOcean ? 'focus:ring-cyan-500 text-cyan-50 placeholder:text-cyan-200/40' : 'focus:ring-blue-500 text-inherit placeholder:text-gray-400'}`}
                   style={{ maxHeight: '100px' }}
                   disabled={isLoading}
                 />
@@ -487,7 +365,7 @@ export function ChatWidget({
                   onClick={sendMessage}
                   disabled={!input.trim() || isLoading}
                   className="p-2.5 rounded-xl text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90"
-                  style={{ backgroundColor: themeColors.accent }}
+                  style={{ backgroundColor: accentColor }}
                   aria-label="Send message"
                 >
                   {isLoading ? (
@@ -497,27 +375,7 @@ export function ChatWidget({
                   )}
                 </button>
               </div>
-              <p className={`text-[10px] ${themeColors.textMuted} text-center mt-2`}>
-                Powered by{' '}
-                <a
-                  href="https://sharkbyte-support.vercel.app"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={`hover:opacity-80 transition-colors`}
-                >
-                  SharkByte
-                </a>
-                {' · '}
-                Made with <span className="text-red-400">❤️</span> by{' '}
-                <a
-                  href="https://dev.nolanhu.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={`hover:opacity-80 transition-colors`}
-                >
-                  Nolan
-                </a>
-              </p>
+              <ChatFooter useTailwind tailwindClass={themeColors.textMuted} />
             </div>
           </motion.div>
         ) : (
@@ -531,7 +389,7 @@ export function ChatWidget({
             onClick={() => setIsOpen(true)}
             className="w-14 h-14 sm:w-16 sm:h-16 rounded-full shadow-lg hover:shadow-xl transition-shadow overflow-hidden"
             style={{
-              boxShadow: `0 4px 20px rgba(0,0,0,0.15), 0 0 0 3px ${themeColors.accent}40`,
+              boxShadow: `0 4px 20px rgba(0,0,0,0.15), 0 0 0 3px ${accentColor}40`,
             }}
             aria-label={`Chat with ${agentName}`}
           >
