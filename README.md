@@ -109,6 +109,7 @@ DO_LLM_MODEL_UUID=18bc9b8f-73c5-11f0-b074-4e013e2ddde4        # GPT-oss-120b (de
 # Optional (auto-discovered if not set)
 DO_PROJECT_ID=your_project_id                 # Auto-creates "SharkByte Support" project if not set
 DO_DATABASE_ID=your_database_id               # Reuse existing vector database
+DO_MODEL_ACCESS_KEY_ID=your_key_id            # Prevents duplicate key creation
 FIRECRAWL_API_KEY=your_firecrawl_api_key      # Fallback for SPAs (https://firecrawl.dev)
 
 # Optional - Demo chat widget on landing page

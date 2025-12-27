@@ -407,7 +407,13 @@ async function listModelAccessKeys(): Promise<ModelAccessKey[]> {
   }
 
   const data = await response.json();
-  return data.model_access_keys || [];
+
+  // Handle DO API response structure:
+  // - List returns { api_key_infos: [...] } (plural with 's')
+  // - Create returns { api_key_info: {...} } (singular)
+  const keys = data.api_key_infos || [];
+
+  return keys;
 }
 
 /**
@@ -431,34 +437,8 @@ async function createModelAccessKey(name: string): Promise<unknown> {
   return data;
 }
 
-/**
- * Regenerate a model access key to get a new secret
- * This invalidates the previous secret and returns a new one
- * @returns The new secret key
- */
-async function regenerateModelAccessKey(keyUuid: string): Promise<string> {
-  const response = await fetch(
-    `${DO_CONFIG.API_BASE}/gen-ai/models/api_keys/${keyUuid}/regenerate`,
-    {
-      method: 'POST',
-      headers: getHeaders(),
-    }
-  );
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(`Failed to regenerate model access key: ${JSON.stringify(error)}`);
-  }
-
-  const data = await response.json();
-  const keyData = data.api_key_info || data.model_access_key || data;
-
-  if (!keyData?.secret_key) {
-    throw new Error('Regenerate response missing secret_key');
-  }
-
-  return keyData.secret_key;
-}
+// Note: Regeneration removed - users should set DO_MODEL_ACCESS_KEY_ID env var
+// or use the DigitalOcean dashboard to regenerate keys if needed
 
 /**
  * Get or create a model access key by name.
@@ -489,23 +469,10 @@ export async function getOrCreateModelAccessKey(name: string = 'sharkbyte-suppor
 
   if (existing) {
     console.log(`Found existing model access key: "${name}" (${existing.uuid})`);
-    // Regenerate the token since env var wasn't set (user needs fresh secret)
-    console.log(`Regenerating token for existing key...`);
-    try {
-      const newSecret = await regenerateModelAccessKey(existing.uuid);
-      console.log('\n' + '='.repeat(60));
-      console.log('🔑 REGENERATED SECRET KEY (save this - shown only once!):');
-      console.log(`   ${newSecret}`);
-      console.log('\n🔧 Add to Vercel env to skip regeneration next time:');
-      console.log(`   DO_MODEL_ACCESS_KEY_ID=${existing.uuid}`);
-      console.log('='.repeat(60) + '\n');
-    } catch (regenErr) {
-      console.warn(`Could not regenerate key (using existing): ${regenErr}`);
-      console.log('\n' + '='.repeat(60));
-      console.log('🔧 Add to Vercel env to use existing key:');
-      console.log(`   DO_MODEL_ACCESS_KEY_ID=${existing.uuid}`);
-      console.log('='.repeat(60) + '\n');
-    }
+    console.log('\n' + '='.repeat(60));
+    console.log('🔧 Add to Vercel env to skip this lookup:');
+    console.log(`   DO_MODEL_ACCESS_KEY_ID=${existing.uuid}`);
+    console.log('='.repeat(60) + '\n');
     cachedModelAccessKeyId = existing.uuid;
     return existing.uuid;
   }
