@@ -22,7 +22,13 @@
 // Load environment variables from .env files (for local development)
 import 'dotenv/config';
 
-import { getProjectId, getCachedDatabaseId, getCachedModelAccessKeyId } from '../src/lib/digitalocean';
+import {
+  getProjectId,
+  getCachedDatabaseId,
+  getCachedModelAccessKeyId,
+  getOrCreateModelAccessKey,
+  getDatabaseId,
+} from '../src/lib/digitalocean';
 import { ensureDemoAgent, getDeploymentDomain } from '../src/lib/demo-agent';
 
 // ANSI color codes for ocean-themed console output
@@ -89,19 +95,23 @@ function printEnvSummary(
   const domain = process.env.APP_DOMAIN || process.env.VERCEL_PROJECT_PRODUCTION_URL || '<auto-detected>';
 
   const c = colors; // shorthand
+
+  // Format access key display - if empty (existing key, not retrievable), show helpful message
+  const accessKeyDisplay = demoAccessKey || '<retrieve-from-local-storage-or-regenerate>';
+
   console.log(`
    ${c.blue}${c.bold}📋 SAVE THESE TO YOUR .env FILE AND VERCEL:${c.reset}
    ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}
 
-   ${c.dim}# Required (you should already have this)${c.reset}
-   ${c.yellow}DO_API_TOKEN${c.reset}=${c.dim}<your-token>${c.reset}
+   ${c.dim}# Required${c.reset}
+   ${c.yellow}DO_API_TOKEN${c.reset}=${c.dim}<your-token>${c.reset}  ${c.dim}# <https://cloud.digitalocean.com/account/api>${c.reset}
 
    ${c.dim}# Speed Optimizations (Add to Vercel → Settings → Environment Variables)${c.reset}
    ${c.yellow}DO_PROJECT_ID${c.reset}=${c.green}${projectId}${c.reset}
-   ${c.yellow}DO_DATABASE_ID${c.reset}=${c.green}${databaseId || '<auto-created-on-first-kb>'}${c.reset}
-   ${c.yellow}DO_MODEL_ACCESS_KEY_ID${c.reset}=${c.green}${modelAccessKeyId || '<auto-created>'}${c.reset}
+   ${c.yellow}DO_DATABASE_ID${c.reset}=${c.green}${databaseId || '<auto-provisioned>'}${c.reset}  ${c.dim}# <https://cloud.digitalocean.com/gen-ai/knowledge-bases>${c.reset}
+   ${c.yellow}DO_MODEL_ACCESS_KEY_ID${c.reset}=${c.green}${modelAccessKeyId || '<auto-created>'}${c.reset}  ${c.dim}# <https://cloud.digitalocean.com/gen-ai/model-access-keys>${c.reset}
    ${c.yellow}NEXT_PUBLIC_DEMO_AGENT_ENDPOINT${c.reset}=${c.green}${demoEndpoint}${c.reset}
-   ${c.yellow}NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY${c.reset}=${c.green}${demoAccessKey}${c.reset}
+   ${c.yellow}NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY${c.reset}=${c.green}${accessKeyDisplay}${c.reset}
 
    ${c.dim}# Optional - Domain Config${c.reset}
    ${c.yellow}APP_DOMAIN${c.reset}=${c.green}${domain}${c.reset}
@@ -112,7 +122,7 @@ function printEnvSummary(
    ${c.yellow}DO_LLM_MODEL_UUID${c.reset}=${c.green}18bc9b8f-73c5-11f0-b074-4e013e2ddde4${c.reset}
 
    ${c.dim}# Optional - Firecrawl (SPA fallback for JS-rendered sites)${c.reset}
-   ${c.yellow}FIRECRAWL_API_KEY${c.reset}=${c.dim}<optional>${c.reset}
+   ${c.yellow}FIRECRAWL_API_KEY${c.reset}=${c.dim}<optional>${c.reset}  ${c.dim}# <https://firecrawl.dev>${c.reset}
 
    ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}
    ${c.blue}🌊 Once all required vars are set, this block will disappear! 🦈${c.reset}
@@ -165,7 +175,15 @@ async function initializeDeployment() {
     }
     console.log(`  ${c.green}✓ Endpoint:${c.reset} ${demoAgent.endpoint || `${c.dim}(deploying...)${c.reset}`}`);
 
-    // Get additional IDs for summary
+    // Discover resources for env summary (especially important on redeploy)
+    // These functions check cache first, then discover from existing resources
+    if (!demoAgent.isNew) {
+      console.log(`  ${c.dim}Discovering existing resources for env summary...${c.reset}`);
+      await getOrCreateModelAccessKey(); // Discovers model access key ID
+      await getDatabaseId(); // Discovers database ID from KBs
+    }
+
+    // Get IDs for summary (now populated from discovery)
     const databaseId = getCachedDatabaseId();
     const modelAccessKeyId = getCachedModelAccessKeyId();
 
