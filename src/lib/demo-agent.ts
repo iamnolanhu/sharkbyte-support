@@ -7,7 +7,6 @@
 
 import {
   findAgentByDomain,
-  createKnowledgeBaseSmartCrawl,
   createAgent,
   createAccessKey,
   startIndexingJob,
@@ -15,6 +14,7 @@ import {
   getDefaultInstruction,
   generateCrawlKBName,
   deleteKnowledgeBase,
+  getOrCreateKnowledgeBase,
 } from './digitalocean';
 import { APP_DOMAIN } from './config';
 
@@ -97,19 +97,51 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
 
     const normalizedUrl = `https://${domain}`;
 
-    // Create crawl KB
+    // Get or create crawl KB (prevents duplicates)
     const crawlKBName = generateCrawlKBName(normalizedUrl);
-    console.log(`  Creating crawl KB: ${crawlKBName}...`);
-    const crawlKBResponse = await createKnowledgeBaseSmartCrawl({
+    console.log(`  Checking/creating crawl KB: ${crawlKBName}...`);
+    const { kb: crawlKB, isExisting: kbWasExisting } = await getOrCreateKnowledgeBase({
       name: crawlKBName,
       seedUrls: [normalizedUrl],
+      url: normalizedUrl,
     });
-    const crawlKBId = crawlKBResponse.knowledge_base.uuid;
-    console.log(`  Crawl KB created: ${crawlKBId}`);
+    const crawlKBId = crawlKB.uuid;
+    console.log(`  ${kbWasExisting ? 'Found existing' : 'Created new'} crawl KB: ${crawlKBId}`);
 
-    // Wait for database to be provisioned
-    console.log(`  Waiting for database to be ready...`);
-    await waitForDatabaseReady(crawlKBId, 120000, 5000);
+    // Wait for database to be provisioned (only if we created a new KB)
+    if (!kbWasExisting) {
+      console.log(`  Waiting for database to be ready...`);
+      await waitForDatabaseReady(crawlKBId, 120000, 5000);
+    }
+
+    // RACE CONDITION CHECK: Re-check for existing agent before creation
+    // Another request may have created the agent while we were waiting for KB/database
+    console.log(`  Re-checking for existing agent before creation...`);
+    const raceCheckAgent = await findAgentByDomain(domain);
+    if (raceCheckAgent && raceCheckAgent.endpoint) {
+      console.log(`  Agent was created by another request: ${raceCheckAgent.uuid}`);
+      // Clean up the KB if we just created it and it's not needed
+      if (!kbWasExisting) {
+        console.log(`  Cleaning up unused KB: ${crawlKBId}...`);
+        try {
+          await deleteKnowledgeBase(crawlKBId);
+          console.log(`  ✓ Unused KB cleaned up`);
+        } catch (cleanupErr) {
+          console.warn(`  Could not cleanup unused KB:`, cleanupErr);
+        }
+      }
+      // Return the existing agent
+      const keyResponse = await createAccessKey(raceCheckAgent.uuid);
+      const accessKey = keyResponse.api_key_info?.secret_key ||
+                       keyResponse.access_key?.key ||
+                       keyResponse.access_key?.api_key || '';
+      return {
+        agentId: raceCheckAgent.uuid,
+        endpoint: raceCheckAgent.endpoint,
+        accessKey,
+        isNew: false,
+      };
+    }
 
     // Note: uploads/structured KBs will be created later when users upload files
     const allKBIds = [crawlKBId];
@@ -127,13 +159,15 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
         description: `Demo customer support agent for ${domain}`,
       });
     } catch (error) {
-      // Rollback: delete the KB to prevent orphans
-      console.log(`Agent creation failed, cleaning up KB: ${crawlKBId}...`);
-      try {
-        await deleteKnowledgeBase(crawlKBId);
-        console.log(`  ✓ KB cleaned up`);
-      } catch (cleanupError) {
-        console.error(`  Failed to cleanup KB:`, cleanupError);
+      // Rollback: delete the KB to prevent orphans (only if we created it)
+      if (!kbWasExisting) {
+        console.log(`Agent creation failed, cleaning up KB: ${crawlKBId}...`);
+        try {
+          await deleteKnowledgeBase(crawlKBId);
+          console.log(`  ✓ KB cleaned up`);
+        } catch (cleanupError) {
+          console.error(`  Failed to cleanup KB:`, cleanupError);
+        }
       }
       throw error;
     }

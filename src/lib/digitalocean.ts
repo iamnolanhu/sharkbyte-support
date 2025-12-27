@@ -417,24 +417,38 @@ async function createModelAccessKey(name: string): Promise<unknown> {
  * Get or create a model access key by name.
  * This ensures the account has a model access key, which is required
  * before agents can use LLM models on fresh accounts.
+ *
+ * DEDUPLICATION: Checks env var first, then existing keys by name,
+ * only creates new key if none exists.
  */
 export async function getOrCreateModelAccessKey(name: string = 'sharkbyte-support'): Promise<string> {
-  // Return cached value if available
+  // 1. Check env var first (prevents duplicate creation across deployments)
+  if (DO_CONFIG.MODEL_ACCESS_KEY_ID) {
+    console.log(`Using model access key from environment: ${DO_CONFIG.MODEL_ACCESS_KEY_ID}`);
+    cachedModelAccessKeyId = DO_CONFIG.MODEL_ACCESS_KEY_ID;
+    return DO_CONFIG.MODEL_ACCESS_KEY_ID;
+  }
+
+  // 2. Return cached value if available (for same request)
   if (cachedModelAccessKeyId) {
     return cachedModelAccessKeyId;
   }
 
-  // Check for existing key with this name
+  // 3. Check for existing key with this name
   const keys = await listModelAccessKeys();
   const existing = keys.find(k => k.name === name);
 
   if (existing) {
     console.log(`Found existing model access key: "${name}" (${existing.uuid})`);
+    console.log('\n' + '='.repeat(60));
+    console.log('🔧 SETUP TIP: Add this to prevent duplicate key creation:');
+    console.log(`   DO_MODEL_ACCESS_KEY_ID=${existing.uuid}`);
+    console.log('='.repeat(60) + '\n');
     cachedModelAccessKeyId = existing.uuid;
     return existing.uuid;
   }
 
-  // Create new key
+  // 4. Create new key only if none exists
   console.log(`Creating model access key: "${name}"...`);
   const response = await createModelAccessKey(name);
 
@@ -453,13 +467,15 @@ export async function getOrCreateModelAccessKey(name: string = 'sharkbyte-suppor
   console.log(`✅ Created model access key: "${name}" (${keyData.uuid})`);
   cachedModelAccessKeyId = keyData.uuid;
 
-  // Log the secret key for user to save (only shown once!)
+  // Log setup instructions
+  console.log('\n' + '='.repeat(60));
+  console.log('🔧 SETUP TIP: Add this to prevent duplicate key creation:');
+  console.log(`   DO_MODEL_ACCESS_KEY_ID=${keyData.uuid}`);
   if (keyData.secret_key) {
-    console.log('\n' + '='.repeat(60));
-    console.log('🔑 NEW MODEL ACCESS KEY CREATED (save this - shown only once!):');
+    console.log('\n🔑 SECRET KEY (save this - shown only once!):');
     console.log(`   ${keyData.secret_key}`);
-    console.log('='.repeat(60) + '\n');
   }
+  console.log('='.repeat(60) + '\n');
 
   return keyData.uuid;
 }
@@ -519,24 +535,39 @@ async function createWorkspace(name: string, description?: string): Promise<unkn
  * Get or create a workspace by name.
  * This ensures the account has a workspace, which is required
  * before agents can be created on fresh accounts.
+ *
+ * DEDUPLICATION: Uses fallback logic to handle DO's auto-created default workspace:
+ * 1. Exact name match
+ * 2. If only one workspace exists (DO's default), use it
+ * 3. Create new workspace with desired name
  */
-export async function getOrCreateWorkspace(name: string = 'SharkByte Support'): Promise<string> {
+export async function getOrCreateWorkspace(name: string = DO_CONFIG.DEFAULT_WORKSPACE_NAME): Promise<string> {
   // Return cached value if available
   if (cachedWorkspaceId) {
     return cachedWorkspaceId;
   }
 
-  // Check for existing workspace with this name
+  // Check for existing workspaces
   const workspaces = await listWorkspaces();
-  const existing = workspaces.find(w => w.name === name);
 
-  if (existing) {
-    console.log(`Found existing workspace: "${name}" (${existing.uuid})`);
-    cachedWorkspaceId = existing.uuid;
-    return existing.uuid;
+  // 1. First: exact name match
+  const exactMatch = workspaces.find(w => w.name === name);
+  if (exactMatch) {
+    console.log(`Found workspace: "${exactMatch.name}" (${exactMatch.uuid})`);
+    cachedWorkspaceId = exactMatch.uuid;
+    return exactMatch.uuid;
   }
 
-  // Create new workspace
+  // 2. Second: if only one workspace exists (DO's auto-created default), use it
+  // This handles the "My Agent Workspace (Created by default)" case
+  if (workspaces.length === 1) {
+    const defaultWs = workspaces[0];
+    console.log(`Using existing default workspace: "${defaultWs.name}" (${defaultWs.uuid})`);
+    cachedWorkspaceId = defaultWs.uuid;
+    return defaultWs.uuid;
+  }
+
+  // 3. Third: create new workspace with desired name
   console.log(`Creating workspace: "${name}"...`);
   const response = await createWorkspace(name, 'Auto-created for SharkByte Support agents');
 
@@ -1157,6 +1188,7 @@ export async function createAgent(
     region: kb.region,
     knowledge_base_ids: options.knowledgeBaseIds,
     instruction: options.instruction,
+    visibility: 'VISIBILITY_PUBLIC', // Set public by default to avoid private endpoints
     ...(options.description && { description: options.description }),
   };
 
@@ -1166,6 +1198,7 @@ export async function createAgent(
     project_id: requestBody.project_id,
     region: requestBody.region,
     model_uuid: requestBody.model_uuid,
+    visibility: requestBody.visibility,
     knowledge_base_count: requestBody.knowledge_base_ids.length,
   });
 
@@ -1211,7 +1244,19 @@ export async function createAgent(
     throw new Error(`Agent creation failed: ${JSON.stringify(errorDetails)}`);
   }
 
-  return response.json();
+  const result: CreateAgentResponse = await response.json();
+
+  // Belt and suspenders: Try to set public visibility after creation
+  // in case the API ignored the visibility field during creation
+  try {
+    await updateAgentVisibility(result.agent.uuid, 'VISIBILITY_PUBLIC');
+    console.log(`Agent ${result.agent.uuid} visibility confirmed as PUBLIC`);
+  } catch (visErr) {
+    // Log but don't fail - agent is still usable, just might be private
+    console.log(`Note: Could not confirm agent visibility: ${visErr}`);
+  }
+
+  return result;
 }
 
 // List all agents in the project
@@ -1236,11 +1281,17 @@ export async function findAgentByDomain(
   const agents = await listAgents();
   // Match agent with exact name "Sammy - {domain}"
   const expectedName = `Sammy - ${domain}`.toLowerCase();
-  return (
-    agents.find((agent) =>
-      agent.name.toLowerCase() === expectedName
-    ) || null
-  );
+
+  // Log for debugging duplicate detection
+  const matchingAgents = agents.filter(a => a.name.toLowerCase() === expectedName);
+  if (matchingAgents.length > 1) {
+    console.warn(`[findAgentByDomain] WARNING: Found ${matchingAgents.length} agents matching "${expectedName}"!`);
+    matchingAgents.forEach(a => console.warn(`  - ${a.uuid}: ${a.name}`));
+  }
+
+  const found = matchingAgents[0] || null;
+  console.log(`[findAgentByDomain] Looking for "${expectedName}", found: ${found ? found.uuid : 'none'}`);
+  return found;
 }
 
 export async function getAgent(agentId: string): Promise<GetAgentResponse> {

@@ -11,6 +11,13 @@ export const DO_CONFIG = {
   // Default region for resources
   DEFAULT_REGION: process.env.DO_REGION || 'tor1',
 
+  // Default workspace name for auto-creation
+  DEFAULT_WORKSPACE_NAME: 'SharkByte Support',
+
+  // Model Access Key ID (optional - prevents duplicate key creation)
+  // Set this after first deployment to reuse existing key
+  MODEL_ACCESS_KEY_ID: process.env.DO_MODEL_ACCESS_KEY_ID || null,
+
   // Default embedding model UUID (Alibaba-NLP/gte-large-en-v1.5)
   DEFAULT_EMBEDDING_MODEL_UUID:
     process.env.DO_EMBEDDING_MODEL_UUID || '22653204-79ed-11ef-bf8f-4e013e2ddde4',
