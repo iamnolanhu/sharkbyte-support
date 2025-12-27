@@ -298,43 +298,100 @@ export function getCachedDatabaseId(): string | undefined {
 }
 
 /**
- * Discovers an existing database by looking at Knowledge Bases and Agents.
- * Since DO doesn't have a direct "list databases" API, we look at
- * existing KBs and agents' attached KBs to find a database_id we can reuse.
+ * List all databases in the account via DO Databases API.
+ * Used as fallback for discovering existing gen-ai databases.
+ */
+async function listDatabases(): Promise<Array<{
+  id: string;
+  name: string;
+  engine: string;
+  created_at: string;
+}>> {
+  try {
+    const response = await fetch(`${DO_CONFIG.API_BASE}/databases`, {
+      headers: getHeaders(),
+    });
+
+    if (!response.ok) {
+      console.log(`  Could not list databases: ${response.status}`);
+      return [];
+    }
+
+    const data = await response.json();
+    return data.databases || [];
+  } catch (err) {
+    console.log(`  Could not list databases: ${err}`);
+    return [];
+  }
+}
+
+/**
+ * Discovers an existing database by looking at Knowledge Bases, Agents, and DO Databases API.
+ * Uses verbose logging to explain why discovery succeeded or failed.
+ *
+ * Discovery priority:
+ * 1. Check existing KBs for database_id field
+ * 2. Check agents' attached KBs for database_id field
+ * 3. Fallback: Check DO Databases API for gen-ai databases
  */
 async function discoverExistingDatabase(): Promise<string | null> {
+  console.log('Discovering existing database...');
+
   try {
-    // First try to discover from existing KBs
+    // Step 1: Check existing KBs for database_id
     const { knowledge_bases } = await listKnowledgeBases();
+    console.log(`  Checking ${knowledge_bases.length} existing KB(s)...`);
+
     for (const kb of knowledge_bases) {
       if (kb.database_id) {
-        console.log(`Found existing database from KB "${kb.name}": ${kb.database_id}`);
+        console.log(`  ✓ Found database in KB "${kb.name}": ${kb.database_id}`);
         return kb.database_id;
+      } else {
+        console.log(`  KB "${kb.name}" has no database_id (may still be provisioning)`);
       }
     }
 
-    // If no KBs have database_id, try to get from agents' attached KBs
-    // This handles the case where KBs were deleted but agents still reference a database
-    console.log('No database found in KBs, checking agents...');
+    // Step 2: Check agents' attached KBs
+    console.log('  No database found in KBs, checking agents...');
     const agents = await listAgents();
+    console.log(`  Checking ${agents.length} agent(s)...`);
+
     for (const agent of agents) {
       const kbIds = getKnowledgeBaseIds(agent);
       for (const kbId of kbIds) {
         try {
           const kbResponse = await getKnowledgeBase(kbId);
           if (kbResponse.knowledge_base.database_id) {
-            console.log(`Found existing database from agent "${agent.name}" KB: ${kbResponse.knowledge_base.database_id}`);
+            console.log(`  ✓ Found database from agent "${agent.name}" KB: ${kbResponse.knowledge_base.database_id}`);
             return kbResponse.knowledge_base.database_id;
           }
         } catch {
-          // KB might not exist anymore, continue
+          console.log(`  Agent "${agent.name}" KB ${kbId} not accessible`);
         }
       }
     }
 
+    // Step 3: Fallback - check DO Databases API directly
+    console.log('  No database found in KBs/agents, checking DO Databases API...');
+    const databases = await listDatabases();
+    const genaiDbs = databases.filter(
+      (db) => db.name?.startsWith('genai-') && db.engine === 'opensearch'
+    );
+
+    if (genaiDbs.length > 0) {
+      // Prefer newest database
+      const newest = genaiDbs.sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )[0];
+      console.log(`  ✓ Found ${genaiDbs.length} gen-ai database(s) via DO API`);
+      console.log(`  ✓ Using newest: "${newest.name}" (${newest.id})`);
+      return newest.id;
+    }
+
+    console.log('  No existing gen-ai database found');
     return null;
   } catch (error) {
-    console.warn('Failed to discover existing database:', error);
+    console.warn('  Failed to discover existing database:', error);
     return null;
   }
 }
@@ -1019,10 +1076,18 @@ export async function startIndexingJob(kbId: string): Promise<void> {
   }
 }
 
+/**
+ * Wait for database to be provisioned by polling the KB's database_id field.
+ * This is the "light ping" approach - no errors logged, just clean polling.
+ *
+ * @param kbId - Knowledge Base ID to check
+ * @param maxWaitMs - Maximum wait time (default: 10 minutes)
+ * @param pollIntervalMs - Interval between checks (default: 30 seconds)
+ */
 export async function waitForDatabaseReady(
   kbId: string,
-  maxWaitMs = 120000,
-  pollIntervalMs = 5000
+  maxWaitMs = 600000,    // 10 minutes (was 2 minutes)
+  pollIntervalMs = 30000 // 30 seconds (was 5 seconds)
 ): Promise<string> {
   const startTime = Date.now();
 
@@ -1032,13 +1097,18 @@ export async function waitForDatabaseReady(
     // Check if database_id is present (database provisioned/associated)
     if (kb.knowledge_base.database_id) {
       const dbId = kb.knowledge_base.database_id;
-      console.log(`Database ready: ${dbId}`);
+      console.log(`  ✓ Database ready: ${dbId}`);
       // Cache the database ID for future use
       setCachedDatabaseId(dbId);
       return dbId;
     }
 
-    console.log('Waiting for database provisioning...');
+    // Show progress with elapsed time
+    const elapsed = Date.now() - startTime;
+    const minutes = Math.floor(elapsed / 60000);
+    const seconds = Math.floor((elapsed % 60000) / 1000);
+    console.log(`  Checking database status (${minutes}m ${seconds}s elapsed)...`);
+
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 
@@ -1132,11 +1202,20 @@ export async function isKBReady(kbId: string): Promise<{ ready: boolean; reason?
   return { ready: false, reason: `Unknown indexing status: ${status}`, hasContent: false };
 }
 
+/**
+ * Attach a Knowledge Base to an Agent.
+ * Simplified logging - assumes DB is already ready (use waitForDatabaseReady first).
+ *
+ * @param agentId - Agent UUID
+ * @param kbId - Knowledge Base UUID
+ * @param maxRetries - Max retry attempts (default: 3 - reduced since DB should be ready)
+ * @param initialDelayMs - Initial delay between retries (default: 5s)
+ */
 export async function attachKnowledgeBaseToAgent(
   agentId: string,
   kbId: string,
-  maxRetries = 10,        // Increased: DB provisioning can take several minutes
-  initialDelayMs = 5000   // Increased: Give more time between retries
+  maxRetries = 3,         // Reduced: DB should be ready before calling this
+  initialDelayMs = 5000
 ): Promise<void> {
   let lastError: Error | null = null;
 
@@ -1144,13 +1223,9 @@ export async function attachKnowledgeBaseToAgent(
     // Add delay before retry attempts (not on first attempt)
     if (attempt > 0) {
       const delay = initialDelayMs * Math.pow(2, attempt - 1);
-      console.log(`Retrying KB attachment in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+      console.log(`  KB attachment pending (attempt ${attempt + 1}/${maxRetries})...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
-
-    // Use path-based POST endpoint for KB attachment (verified via curl testing)
-    // POST /gen-ai/agents/{agent_uuid}/knowledge_bases/{kb_uuid}
-    console.log(`Attach KB API call (attempt ${attempt + 1}/${maxRetries}): POST /gen-ai/agents/${agentId}/knowledge_bases/${kbId}`);
 
     try {
       const response = await fetch(
@@ -1162,10 +1237,15 @@ export async function attachKnowledgeBaseToAgent(
       );
 
       const responseText = await response.text();
-      console.log(`Attach KB API response status: ${response.status}`);
 
       if (!response.ok) {
-        console.log(`Attach KB API error:`, responseText);
+        // Friendlier error - don't show raw JSON error to users
+        const isDbNotReady = responseText.includes('failed to link');
+        if (isDbNotReady) {
+          console.log(`  KB attachment waiting (database may still be initializing)...`);
+        } else {
+          console.log(`  KB attachment failed: ${response.status}`);
+        }
         lastError = new Error(`Failed to attach KB to agent: ${responseText}`);
         continue; // Retry
       }
@@ -1177,7 +1257,7 @@ export async function attachKnowledgeBaseToAgent(
         const kbAttached = attachedKBs.some((kb: { uuid: string }) => kb.uuid === kbId);
 
         if (kbAttached) {
-          console.log(`KB ${kbId} attachment verified - found in POST response`);
+          console.log(`  ✓ KB attached successfully`);
           return; // Success!
         }
       } catch {
@@ -1185,23 +1265,21 @@ export async function attachKnowledgeBaseToAgent(
       }
 
       // Fallback: Verify attachment by fetching the agent
-      console.log(`Verifying KB attachment via GET...`);
       const agentResponse = await getAgent(agentId);
       const attachedKBIds = getKnowledgeBaseIds(agentResponse.agent);
       const kbAttached = attachedKBIds.includes(kbId);
 
       if (!kbAttached) {
-        console.warn(`KB attachment verification failed (attempt ${attempt + 1}) - KB ${kbId} not found`);
-        console.warn(`Agent has KBs:`, attachedKBIds.length > 0 ? attachedKBIds.join(', ') : 'none');
+        console.log(`  KB attachment not yet confirmed (attempt ${attempt + 1}/${maxRetries})`);
         lastError = new Error(`KB attachment failed - KB ${kbId} not attached after verification`);
         continue; // Retry
       }
 
-      console.log(`KB ${kbId} attachment verified via GET - found in agent's KB list`);
+      console.log(`  ✓ KB attached successfully`);
       return; // Success!
     } catch (err) {
       if (err instanceof SyntaxError) {
-        console.warn(`Could not parse attach response as JSON (attempt ${attempt + 1})`);
+        console.log(`  KB attachment response parsing issue (attempt ${attempt + 1})`);
         lastError = new Error('Failed to parse attach response');
         continue; // Retry
       }

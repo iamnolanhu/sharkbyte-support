@@ -24,6 +24,41 @@ import { APP_DOMAIN } from './config';
 // Cache for demo agent results per domain
 const demoAgentCache = new Map<string, Promise<DemoAgentResult>>();
 
+/**
+ * Set agent visibility to public in the background (non-blocking).
+ * Polls for agent endpoint availability before attempting visibility update.
+ *
+ * This runs as a fire-and-forget operation - it won't block the main flow.
+ * Logs success when visibility is set, otherwise silently continues polling.
+ */
+async function setVisibilityAsync(agentId: string): Promise<void> {
+  const maxAttempts = 20; // Up to 10 min (30s × 20)
+  const intervalMs = 30000; // 30 seconds
+
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const agentInfo = await getAgent(agentId);
+      const endpoint = agentInfo.agent.deployment?.url || agentInfo.agent.endpoint;
+
+      if (endpoint) {
+        await updateAgentVisibility(agentId, 'VISIBILITY_PUBLIC');
+        console.log(`  ✓ Agent set to public`);
+        return;
+      }
+
+      // Only log every 3rd attempt to reduce noise
+      if (i % 3 === 0 && i > 0) {
+        const elapsed = i * 30;
+        console.log(`  Waiting for agent endpoint (${elapsed}s)...`);
+      }
+    } catch {
+      // Ignore errors - will retry
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  console.log(`  Note: Could not set public during init (status polling will retry)`);
+}
+
 export interface DemoAgentResult {
   agentId: string;
   endpoint: string;
@@ -118,11 +153,7 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     const crawlKBId = crawlKB.uuid;
     console.log(`  ${kbWasExisting ? 'Found existing' : 'Created new'} crawl KB: ${crawlKBId}`);
 
-    // Wait for database to be provisioned (only if we created a new KB)
-    if (!kbWasExisting) {
-      console.log(`  Waiting for database to be ready...`);
-      await waitForDatabaseReady(crawlKBId, 120000, 5000);
-    }
+    // Note: We'll wait for DB after agent creation (allows visibility setting to start early)
 
     // RACE CONDITION CHECK: Re-check for existing agent before creation
     // Another request may have created the agent while we were waiting for KB/database
@@ -181,57 +212,42 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     const agent = agentResponse.agent;
     console.log(`Agent created: ${agent.uuid}`);
 
-    // Wait for agent AND database to initialize before KB attachment
-    // (DO API may need time before agent accepts KB attachments)
-    console.log(`  Waiting for agent and database to initialize...`);
-    await new Promise(resolve => setTimeout(resolve, 10000)); // Increased from 3s to 10s
+    // STEP 1: Create API key immediately (doesn't need DB)
+    console.log(`  Creating access key...`);
+    const { key: apiKey } = await getOrCreateAccessKey(agent.uuid);
+    console.log(`  ✓ Access key created`);
 
-    // Attach KB explicitly (DO API ignores knowledge_base_ids in create request)
-    console.log(`  Attaching KB ${crawlKBId} to agent...`);
+    // STEP 2: Start visibility polling in background (non-blocking)
+    // This runs async while we wait for DB - logs when visibility is set
+    console.log(`  Setting agent visibility to public (background)...`);
+    setVisibilityAsync(agent.uuid); // Fire and forget - don't await
+
+    // STEP 3: Wait for database to be ready (light ping - no scary errors)
+    // This is the "proper" way to wait - checks KB's database_id field
+    if (!kbWasExisting) {
+      console.log(`  Waiting for database to provision (up to 10 minutes)...`);
+      try {
+        await waitForDatabaseReady(crawlKBId); // Uses new defaults: 10 min, 30s intervals
+      } catch {
+        console.log(`  Note: Database may still be provisioning (will continue anyway)`);
+      }
+    } else {
+      console.log(`  Database already provisioned (existing KB)`);
+    }
+
+    // STEP 4: Attach KB (should succeed now that DB is ready)
+    console.log(`  Attaching KB to agent...`);
     try {
       await attachKnowledgeBaseToAgent(agent.uuid, crawlKBId);
-      console.log(`  ✓ KB attached successfully`);
     } catch (attachError) {
       console.warn(`  KB attachment failed (auto-repair will handle):`,
         attachError instanceof Error ? attachError.message : attachError);
     }
 
-    // Create API key (this is a new agent, so key will be created)
-    const { key: apiKey } = await getOrCreateAccessKey(agent.uuid);
-
-    // Start indexing
-    console.log(`Starting indexing job on crawl KB...`);
+    // STEP 5: Start indexing
+    console.log(`  Starting indexing job...`);
     await startIndexingJob(crawlKBId);
-
-    // Try to set visibility with polling (agent needs endpoint before visibility can be set)
-    console.log(`  Setting agent visibility to public...`);
-    let visibilitySet = false;
-    for (let i = 0; i < 6; i++) {
-      try {
-        // Check if agent has endpoint yet
-        const agentInfo = await getAgent(agent.uuid);
-        const endpoint = agentInfo.agent.deployment?.url || agentInfo.agent.endpoint;
-
-        if (endpoint) {
-          await updateAgentVisibility(agent.uuid, 'VISIBILITY_PUBLIC');
-          console.log(`  ✓ Agent set to public`);
-          visibilitySet = true;
-          break;
-        }
-
-        console.log(`  Waiting for agent endpoint (${i + 1}/6)...`);
-        await new Promise(resolve => setTimeout(resolve, 10000));
-      } catch (err) {
-        console.log(`  Could not set public yet (attempt ${i + 1}/6)`);
-        if (i < 5) {
-          await new Promise(resolve => setTimeout(resolve, 10000));
-        }
-      }
-    }
-
-    if (!visibilitySet) {
-      console.log(`  Note: Could not set public during init (status polling will retry)`);
-    }
+    console.log(`  ✓ Indexing started`);
 
     console.log(`Demo agent created successfully`);
 
