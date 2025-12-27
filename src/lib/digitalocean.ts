@@ -565,10 +565,13 @@ async function createWorkspace(name: string, description?: string): Promise<unkn
  * This ensures the account has a workspace, which is required
  * before agents can be created on fresh accounts.
  *
- * DEDUPLICATION: Uses fallback logic to handle DO's auto-created default workspace:
- * 1. Exact name match
- * 2. If only one workspace exists (DO's default), use it
- * 3. Create new workspace with desired name
+ * DEDUPLICATION: Gets or creates the "SharkByte Support" workspace.
+ * NOTE: DO API does not support assigning agents to workspaces - they go to default.
+ * We still create our workspace for organization, but agents cannot be assigned to it via API.
+ * Priority:
+ * 1. In-memory cache
+ * 2. Auto-discover existing "SharkByte Support" workspace
+ * 3. Create new workspace (for organization - agents still go to default)
  */
 export async function getOrCreateWorkspace(name: string = DO_CONFIG.DEFAULT_WORKSPACE_NAME): Promise<string> {
   // Return cached value if available
@@ -579,7 +582,7 @@ export async function getOrCreateWorkspace(name: string = DO_CONFIG.DEFAULT_WORK
   // Check for existing workspaces
   const workspaces = await listWorkspaces();
 
-  // 1. First: exact name match
+  // Look for exact name match (our "SharkByte Support" workspace)
   const exactMatch = workspaces.find(w => w.name === name);
   if (exactMatch) {
     console.log(`Found workspace: "${exactMatch.name}" (${exactMatch.uuid})`);
@@ -587,16 +590,8 @@ export async function getOrCreateWorkspace(name: string = DO_CONFIG.DEFAULT_WORK
     return exactMatch.uuid;
   }
 
-  // 2. Second: if only one workspace exists (DO's auto-created default), use it
-  // This handles the "My Agent Workspace (Created by default)" case
-  if (workspaces.length === 1) {
-    const defaultWs = workspaces[0];
-    console.log(`Using existing default workspace: "${defaultWs.name}" (${defaultWs.uuid})`);
-    cachedWorkspaceId = defaultWs.uuid;
-    return defaultWs.uuid;
-  }
-
-  // 3. Third: create new workspace with desired name
+  // Create new workspace with our name (for organization purposes)
+  // NOTE: Agents cannot be assigned to this workspace via API - they go to default workspace
   console.log(`Creating workspace: "${name}"...`);
   const response = await createWorkspace(name, 'Auto-created for SharkByte Support agents');
 
@@ -610,7 +605,10 @@ export async function getOrCreateWorkspace(name: string = DO_CONFIG.DEFAULT_WORK
   }
 
   console.log(`✅ Created workspace: "${name}" (${wsData.uuid})`);
+  console.log(`   Note: Agents will be created in default workspace (DO API limitation)`);
+  console.log(`   Move agents manually via Control Panel if needed`);
   cachedWorkspaceId = wsData.uuid;
+
   return wsData.uuid;
 }
 
@@ -951,26 +949,56 @@ export async function uploadContentToKB(
   console.log(`[DO] Data source added to KB`);
 }
 
+/**
+ * Start an indexing job for a knowledge base.
+ * Includes retry logic for "failed to get db creds" errors which occur when
+ * the database is still initializing after provisioning.
+ */
 export async function startIndexingJob(kbId: string): Promise<void> {
-  const response = await fetchWithRetry(
-    `${DO_CONFIG.API_BASE}/gen-ai/indexing_jobs`,
-    {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({
-        knowledge_base_uuid: kbId,
-      }),
-    },
-    { maxRetries: 2, initialDelayMs: 1000 }
-  );
+  const maxRetries = 5;
+  const retryDelays = [5000, 10000, 15000, 20000, 30000]; // 5s, 10s, 15s, 20s, 30s
 
-  // 200 OK or empty response means success
-  if (!response.ok) {
-    const error = await response.json();
-    // Ignore "already running" error
-    if (!error.message?.includes('already has an indexing job running')) {
-      throw new Error(`Failed to start indexing: ${JSON.stringify(error)}`);
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const response = await fetchWithRetry(
+      `${DO_CONFIG.API_BASE}/gen-ai/indexing_jobs`,
+      {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          knowledge_base_uuid: kbId,
+        }),
+      },
+      { maxRetries: 2, initialDelayMs: 1000 }
+    );
+
+    // 200 OK or empty response means success
+    if (response.ok) {
+      if (attempt > 0) {
+        console.log(`✅ Indexing job started successfully after ${attempt + 1} attempts`);
+      }
+      return;
     }
+
+    const error = await response.json();
+
+    // Ignore "already running" error - that's success
+    if (error.message?.includes('already has an indexing job running')) {
+      console.log('Indexing job already running (this is okay)');
+      return;
+    }
+
+    // Retry on "failed to get db creds" - database not ready yet
+    if (error.message?.includes('failed to get db creds')) {
+      if (attempt < maxRetries - 1) {
+        const delay = retryDelays[attempt];
+        console.log(`⏳ Database not ready yet (attempt ${attempt + 1}/${maxRetries}), waiting ${delay / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+    }
+
+    // For other errors or max retries exhausted, throw
+    throw new Error(`Failed to start indexing: ${JSON.stringify(error)}`);
   }
 }
 
@@ -1198,8 +1226,13 @@ export async function createAgent(
   // Ensure model access key exists (required for agent creation on fresh accounts)
   await getOrCreateModelAccessKey();
 
-  // Ensure workspace exists (required for agent creation on fresh accounts)
+  // NOTE: DO API does not support workspace assignment during agent creation.
+  // Agents are always created in the default "My Agent Workspace (Created by default)".
+  // Workspace movement is Control Panel only - no API endpoint exists.
+  // We still create our workspace for organization, but cannot assign agents to it programmatically.
+  // See: DEPLOYMENT.md troubleshooting section for details.
   await getOrCreateWorkspace();
+  console.log(`Note: Agent will be created in default workspace (DO API limitation)`);
 
   // Fetch KB details to use its project_id and region for consistency
   // This ensures the agent is created in the same project/region as its KBs
@@ -1215,6 +1248,7 @@ export async function createAgent(
     model_uuid: DO_CONFIG.DEFAULT_LLM_MODEL_UUID,
     project_id: kb.project_id,
     region: kb.region,
+    // NOTE: workspace_id is NOT supported by DO API - agents go to default workspace
     knowledge_base_ids: options.knowledgeBaseIds,
     instruction: options.instruction,
     visibility: 'VISIBILITY_PUBLIC', // Set public by default to avoid private endpoints

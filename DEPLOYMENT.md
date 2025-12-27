@@ -8,6 +8,7 @@ This guide walks you through deploying SharkByte Support on your own DigitalOcea
 |------|---------|
 | [Generate API Token](https://cloud.digitalocean.com/account/api) | Create your DO API token |
 | [Create First Agent](https://cloud.digitalocean.com/gen-ai/agents/new) | **Required one-time setup** |
+| [Agent Workspaces](https://cloud.digitalocean.com/gen-ai/agent-workspaces) | Move agents between workspaces (Control Panel only) |
 | [Model Access Keys](https://cloud.digitalocean.com/gen-ai/model-access-keys) | Find your model access key ID |
 | [Knowledge Bases](https://cloud.digitalocean.com/gen-ai/knowledge-bases) | Find database ID |
 | [Billing Settings](https://cloud.digitalocean.com/account/billing) | Enable billing |
@@ -102,6 +103,8 @@ After your first successful deployment, add these environment variables to preve
 | `NEXT_PUBLIC_DEMO_AGENT_ENDPOINT` | Faster demo widget loading | Build logs |
 | `NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY` | Faster demo widget loading | Build logs |
 
+> **Note:** `DO_WORKSPACE_ID` is NOT supported - see [Agents in Wrong Workspace](#agents-in-wrong-workspace) in troubleshooting.
+
 ### Finding Values in Build Logs
 
 After deployment, look for lines like:
@@ -126,6 +129,14 @@ After deployment, look for lines like:
 **Cause:** Fresh DO account hasn't initialized Gradient AI services.
 
 **Solution:** Go to [Create Agent](https://cloud.digitalocean.com/gen-ai/agents/new) and create one agent manually first.
+
+### Agents in Wrong Workspace
+
+**Cause:** DigitalOcean REST API limitation - the public agent creation API does not support workspace assignment. All agents created via API are placed in the default "My Agent Workspace (Created by default)" workspace.
+
+**Solution:** This is a known DO API limitation. You can manually move agents to the "SharkByte Support" workspace via the [Agent Workspaces](https://cloud.digitalocean.com/gen-ai/agent-workspaces) page in the Control Panel.
+
+> **Future Fix:** The DO Control Panel uses an internal GraphQL API that does support `workspace_uuid`. See `.claude/docs/DO-WORKSPACE-API-NOTES.md` for details on potential future implementation.
 
 ### Multiple Databases Created
 
@@ -169,6 +180,7 @@ DO_API_TOKEN=          # Your DigitalOcean API token
 DO_PROJECT_ID=         # Prevents re-discovery
 DO_DATABASE_ID=        # Prevents duplicate databases ($20/mo each!)
 DO_MODEL_ACCESS_KEY_ID=# Prevents duplicate keys
+# NOTE: DO_WORKSPACE_ID is NOT supported - see troubleshooting section
 ```
 
 ### Optional Performance

@@ -12,6 +12,7 @@ export const DO_CONFIG = {
   DEFAULT_REGION: process.env.DO_REGION || 'tor1',
 
   // Default workspace name for auto-creation
+  // NOTE: DO API does not support workspace assignment - agents go to default workspace
   DEFAULT_WORKSPACE_NAME: 'SharkByte Support',
 
   // Model Access Key ID (optional - prevents duplicate key creation)
