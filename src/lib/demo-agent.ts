@@ -16,6 +16,7 @@ import {
   deleteKnowledgeBase,
   getOrCreateKnowledgeBase,
   updateAgentVisibility,
+  attachKnowledgeBaseToAgent,
 } from './digitalocean';
 import { APP_DOMAIN } from './config';
 
@@ -179,12 +180,41 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     const agent = agentResponse.agent;
     console.log(`Agent created: ${agent.uuid}`);
 
+    // Wait for agent to initialize before KB attachment
+    // (DO API may need time before agent accepts KB attachments)
+    console.log(`  Waiting for agent to initialize...`);
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Attach KB explicitly (DO API ignores knowledge_base_ids in create request)
+    console.log(`  Attaching KB ${crawlKBId} to agent...`);
+    try {
+      await attachKnowledgeBaseToAgent(agent.uuid, crawlKBId);
+      console.log(`  ✓ KB attached successfully`);
+    } catch (attachError) {
+      console.warn(`  KB attachment failed (auto-repair will handle):`,
+        attachError instanceof Error ? attachError.message : attachError);
+    }
+
     // Create API key (this is a new agent, so key will be created)
     const { key: apiKey } = await getOrCreateAccessKey(agent.uuid);
 
     // Start indexing
     console.log(`Starting indexing job on crawl KB...`);
     await startIndexingJob(crawlKBId);
+
+    // Wait for agent deployment before setting visibility
+    // (DO API requires endpoint to exist before visibility can be set)
+    console.log(`  Waiting for agent deployment...`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    // Attempt to set visibility (may fail if still deploying - status polling will retry)
+    try {
+      await updateAgentVisibility(agent.uuid, 'VISIBILITY_PUBLIC');
+      console.log(`  ✓ Agent set to public`);
+    } catch (err) {
+      console.log(`  Note: Could not set public yet (status polling will retry)`);
+    }
+
     console.log(`Demo agent created successfully`);
 
     return {
