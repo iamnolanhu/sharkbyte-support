@@ -19,13 +19,13 @@ const firecrawlInProgress = new Set<string>();
 const qualityCheckInProgress = new Set<string>();
 // Cache quality check results (KB ID -> isLowQuality)
 const qualityCheckResults = new Map<string, boolean>();
-// Track agents we've already set to public (to avoid repeated calls)
-const agentsSetToPublic = new Set<string>();
+// NOTE: Removed agentsSetToPublic cache - we always try to set public
+// because the cache only persists per request/process and is cleared on redeploy
 
 /**
  * Check if agent is deployed and ready for chat
  * Agent is ready when it has an endpoint URL (not empty)
- * Also sets agent to public on first activation
+ * Also sets agent to public (always tries - DO API is idempotent)
  */
 async function checkAgentDeployment(
   agentId: string,
@@ -33,16 +33,14 @@ async function checkAgentDeployment(
 ): Promise<{ isDeployed: boolean; message?: string }> {
   // Agent is ready when it has an endpoint URL
   if (agentEndpoint) {
-    // Agent has endpoint - try to set public if we haven't already
-    if (!agentsSetToPublic.has(agentId)) {
-      try {
-        await updateAgentVisibility(agentId, 'VISIBILITY_PUBLIC');
-        agentsSetToPublic.add(agentId);
-        console.log(`[agent-status] Agent ${agentId} set to public`);
-      } catch (err) {
-        // Log but don't fail - agent is still usable
-        console.log(`[agent-status] Could not set agent public: ${err}`);
-      }
+    // Agent has endpoint - always try to set public
+    // (DO API is idempotent, and we removed caching since it clears on redeploy)
+    try {
+      await updateAgentVisibility(agentId, 'VISIBILITY_PUBLIC');
+      console.log(`[agent-status] Agent ${agentId} set to public`);
+    } catch (err) {
+      // Log but don't fail - agent is still usable
+      console.log(`[agent-status] Could not set agent public: ${err}`);
     }
     return { isDeployed: true };
   }
@@ -159,16 +157,34 @@ export async function GET(request: NextRequest) {
           message = deployment.message;
         }
       }
-    } else if (indexStatus === 'INDEX_JOB_STATUS_RUNNING' || indexStatus === 'INDEX_JOB_STATUS_PENDING') {
-      status = 'indexing';
-      message = 'Indexing website content...';
+    } else if (
+      indexStatus === 'INDEX_JOB_STATUS_RUNNING' ||
+      indexStatus === 'INDEX_JOB_STATUS_PENDING' ||
+      indexStatus === 'INDEX_JOB_STATUS_IN_PROGRESS'
+    ) {
+      // KB is still indexing - but check if agent is already deployed
+      // If agent has endpoint, chat can work while indexing continues in background
+      const deployment = await checkAgentDeployment(agentId, agentEndpoint);
+      if (deployment.isDeployed) {
+        status = 'ready';
+        message = 'Agent ready (indexing continues in background)';
+      } else {
+        status = 'indexing';
+        message = 'Indexing website content...';
+      }
     } else if (indexStatus === 'INDEX_JOB_STATUS_FAILED') {
       status = 'error';
       message = 'Indexing failed';
     } else {
       // Unknown/initial state or still waiting
-      status = 'creating';
-      message = readiness.reason;
+      // Still check if agent is deployed
+      const deployment = await checkAgentDeployment(agentId, agentEndpoint);
+      if (deployment.isDeployed) {
+        status = 'ready';
+      } else {
+        status = 'creating';
+        message = readiness.reason || `Unknown indexing status: ${indexStatus}`;
+      }
     }
 
     const response: AgentStatusResponse = {

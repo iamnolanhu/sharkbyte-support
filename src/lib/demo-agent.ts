@@ -8,7 +8,7 @@
 import {
   findAgentByDomain,
   createAgent,
-  createAccessKey,
+  getOrCreateAccessKey,
   startIndexingJob,
   waitForDatabaseReady,
   getDefaultInstruction,
@@ -78,11 +78,8 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     if (existingAgent) {
       console.log(`Demo agent exists: ${existingAgent.uuid} (endpoint: ${existingAgent.endpoint || 'deploying...'})`);
 
-      // Create a new API key for this session
-      const keyResponse = await createAccessKey(existingAgent.uuid);
-      const accessKey = keyResponse.api_key_info?.secret_key ||
-                       keyResponse.access_key?.key ||
-                       keyResponse.access_key?.api_key || '';
+      // Get or create API key (reuses existing if found)
+      const { key: accessKey } = await getOrCreateAccessKey(existingAgent.uuid);
 
       return {
         agentId: existingAgent.uuid,
@@ -131,10 +128,7 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
         }
       }
       // Return the existing agent (endpoint may be empty if still deploying)
-      const keyResponse = await createAccessKey(raceCheckAgent.uuid);
-      const accessKey = keyResponse.api_key_info?.secret_key ||
-                       keyResponse.access_key?.key ||
-                       keyResponse.access_key?.api_key || '';
+      const { key: accessKey } = await getOrCreateAccessKey(raceCheckAgent.uuid);
       return {
         agentId: raceCheckAgent.uuid,
         endpoint: raceCheckAgent.endpoint || '',
@@ -174,13 +168,8 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     const agent = agentResponse.agent;
     console.log(`Agent created: ${agent.uuid}`);
 
-    // Create API key
-    console.log(`Creating API key...`);
-    const apiKeyResponse = await createAccessKey(agent.uuid);
-    const apiKey = apiKeyResponse.api_key_info?.secret_key ||
-                  apiKeyResponse.access_key?.key ||
-                  apiKeyResponse.access_key?.api_key || '';
-    console.log(`API key created`);
+    // Create API key (this is a new agent, so key will be created)
+    const { key: apiKey } = await getOrCreateAccessKey(agent.uuid);
 
     // Start indexing
     console.log(`Starting indexing job on crawl KB...`);
@@ -210,10 +199,7 @@ export async function getDemoAgentInfo(domain?: string): Promise<DemoAgentResult
     const existingAgent = await findAgentByDomain(resolvedDomain);
 
     if (existingAgent) {
-      const keyResponse = await createAccessKey(existingAgent.uuid);
-      const accessKey = keyResponse.api_key_info?.secret_key ||
-                       keyResponse.access_key?.key ||
-                       keyResponse.access_key?.api_key || '';
+      const { key: accessKey } = await getOrCreateAccessKey(existingAgent.uuid);
 
       return {
         agentId: existingAgent.uuid,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   createAgent,
-  createAccessKey,
+  getOrCreateAccessKey,
   getAgent,
   startIndexingJob,
   waitForDatabaseReady,
@@ -38,18 +38,15 @@ export async function POST(request: NextRequest) {
     const existingAgent = await findAgentByDomain(domain);
 
     if (existingAgent) {
-      // Return existing agent - create a new access key for this session
+      // Return existing agent - get or create access key (reuses existing)
       console.log(`Found existing agent: ${existingAgent.name} (${existingAgent.uuid})`);
 
       // Get fresh agent details to ensure we have the endpoint
       const agentDetails = await getAgent(existingAgent.uuid);
       const agent = agentDetails.agent;
 
-      // Create a new API key for this session
-      const keyResponse = await createAccessKey(agent.uuid);
-      const accessKey = keyResponse.api_key_info?.secret_key ||
-                       keyResponse.access_key?.key ||
-                       keyResponse.access_key?.api_key || '';
+      // Get or create API key (reuses existing if found)
+      const { key: accessKey } = await getOrCreateAccessKey(agent.uuid);
 
       const kbIds = getKnowledgeBaseIds(agent);
       const response: CreateAgentApiResponse = {
@@ -102,10 +99,7 @@ export async function POST(request: NextRequest) {
       console.log(`Agent was created by another request: ${raceCheckAgent.uuid}`);
       const agentDetails = await getAgent(raceCheckAgent.uuid);
       const agent = agentDetails.agent;
-      const keyResponse = await createAccessKey(agent.uuid);
-      const accessKey = keyResponse.api_key_info?.secret_key ||
-                       keyResponse.access_key?.key ||
-                       keyResponse.access_key?.api_key || '';
+      const { key: accessKey } = await getOrCreateAccessKey(agent.uuid);
 
       const kbIds = getKnowledgeBaseIds(agent);
       return NextResponse.json({
@@ -154,13 +148,8 @@ export async function POST(request: NextRequest) {
     // Note: Agent visibility is set to public by agent-status polling
     // when the agent becomes ACTIVE (can't be set while still deploying)
 
-    // Step 4: Create API key for the agent
-    console.log(`Creating API key...`);
-    const apiKeyResponse = await createAccessKey(agent.uuid);
-    const apiKey = apiKeyResponse.api_key_info?.secret_key ||
-                  apiKeyResponse.access_key?.key ||
-                  apiKeyResponse.access_key?.api_key || '';
-    console.log(`API key created`);
+    // Step 4: Create API key for the agent (this is a new agent, so key will be created)
+    const { key: apiKey } = await getOrCreateAccessKey(agent.uuid);
 
     // Step 5: Start indexing job on crawl KB
     console.log(`Starting indexing job on crawl KB...`);

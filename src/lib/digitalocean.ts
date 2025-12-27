@@ -1448,7 +1448,8 @@ export async function deleteAgentWithKBs(agentId: string): Promise<void> {
 // Create API key for agent endpoint authentication
 // Note: Uses /api_keys endpoint, not /access_keys
 export async function createAccessKey(
-  agentId: string
+  agentId: string,
+  name: string = 'sharkbyte-key'
 ): Promise<CreateAccessKeyResponse> {
   const response = await fetchWithRetry(
     `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/api_keys`,
@@ -1456,7 +1457,7 @@ export async function createAccessKey(
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
-        name: `sharkbyte-key-${Date.now()}`,
+        name,
       }),
     },
     { maxRetries: 2, initialDelayMs: 1000 }
@@ -1493,29 +1494,47 @@ export async function listAccessKeys(
 // Get existing API key or create new one if none exist
 // Note: When listing, we only get uuid/name - not the secret key
 // The secret is only returned at creation time
-// For existing keys, we return the uuid which can be used for identification
+// For existing keys, we return empty string (frontend uses localStorage or env var)
 export async function getOrCreateAccessKey(
-  agentId: string
+  agentId: string,
+  name: string = 'sharkbyte-key'
 ): Promise<{ key: string; isNew: boolean }> {
   try {
-    // Check for existing keys
+    // Check for existing keys with matching name
     const existingKeys = await listAccessKeys(agentId);
-    if (existingKeys.api_keys && existingKeys.api_keys.length > 0) {
-      // Return first existing key's uuid - the actual secret is not retrievable
-      // For widget embedding, we need to create a new key to get the secret
-      console.log(`Agent ${agentId} has ${existingKeys.api_keys.length} existing API keys`);
+    const keys = existingKeys.api_keys || [];
+
+    if (keys.length > 0) {
+      console.log(`Agent ${agentId} has ${keys.length} existing API keys`);
+
+      // Find key by exact name match
+      const existing = keys.find(k => k.name === name);
+      if (existing) {
+        console.log(`Found existing access key: "${name}" (${existing.uuid})`);
+        // Note: secret not retrievable - return empty string
+        // Frontend should use localStorage or env var for the actual secret
+        return { key: '', isNew: false };
+      }
+
+      // Also check if ANY key exists with our prefix (legacy keys with timestamp)
+      const legacyKey = keys.find(k => k.name?.startsWith('sharkbyte-key'));
+      if (legacyKey) {
+        console.log(`Found legacy access key: "${legacyKey.name}" (${legacyKey.uuid})`);
+        return { key: '', isNew: false };
+      }
     }
   } catch (error) {
     console.log(`Could not list API keys for ${agentId}:`, error);
   }
 
-  // Always create a new key since we can't retrieve secrets of existing keys
-  // But at least we logged how many exist
-  const keyResponse = await createAccessKey(agentId);
+  // Only create if no key exists
+  console.log(`Creating access key: "${name}"...`);
+  const keyResponse = await createAccessKey(agentId, name);
   const key = keyResponse.api_key_info?.secret_key ||
               keyResponse.access_key?.key ||
               keyResponse.access_key?.api_key || '';
 
+  console.log(`✅ Created access key: "${name}"`);
   return { key, isNew: true };
 }
 
