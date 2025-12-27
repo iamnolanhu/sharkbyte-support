@@ -1586,10 +1586,32 @@ export async function listAccessKeys(
   return response.json();
 }
 
+// Delete an API key for an agent
+export async function deleteAccessKey(
+  agentId: string,
+  keyId: string
+): Promise<void> {
+  console.log(`Deleting access key ${keyId} for agent ${agentId}...`);
+  const response = await fetch(
+    `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/api_keys/${keyId}`,
+    {
+      method: 'DELETE',
+      headers: getHeaders(),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to delete API Key: ${JSON.stringify(error)}`);
+  }
+
+  console.log(`✅ Deleted access key ${keyId}`);
+}
+
 // Get existing API key or create new one if none exist
+// If existing key found but secret not in env, regenerate it to ensure build logs show the key
 // Note: When listing, we only get uuid/name - not the secret key
 // The secret is only returned at creation time
-// For existing keys, we return empty string (frontend uses localStorage or env var)
 export async function getOrCreateAccessKey(
   agentId: string,
   name: string = 'sharkbyte-key'
@@ -1603,27 +1625,32 @@ export async function getOrCreateAccessKey(
     if (keys.length > 0) {
       console.log(`Agent ${agentId} has ${keys.length} existing API keys`);
 
-      // Find key by exact name match
-      const existing = keys.find(k => k.name === name);
-      if (existing) {
-        console.log(`Found existing access key: "${name}" (${existing.uuid})`);
-        // Note: secret not retrievable - return empty string
-        // Frontend should use localStorage or env var for the actual secret
-        return { key: '', isNew: false };
-      }
+      // Find key by exact name match or legacy prefix
+      const existing = keys.find(k => k.name === name) ||
+                      keys.find(k => k.name?.startsWith('sharkbyte-key'));
 
-      // Also check if ANY key exists with our prefix (legacy keys with timestamp)
-      const legacyKey = keys.find(k => k.name?.startsWith('sharkbyte-key'));
-      if (legacyKey) {
-        console.log(`Found legacy access key: "${legacyKey.name}" (${legacyKey.uuid})`);
-        return { key: '', isNew: false };
+      if (existing) {
+        // Check if we have the secret in env - if so, we can reuse the key
+        if (process.env.NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY) {
+          console.log(`Found existing access key: "${existing.name}" (secret in env)`);
+          return { key: '', isNew: false };
+        }
+
+        // Secret not in env - regenerate to ensure build log shows the key
+        console.log(`Found existing access key but secret not in env - regenerating...`);
+        try {
+          await deleteAccessKey(agentId, existing.uuid);
+        } catch (deleteError) {
+          console.warn(`Could not delete old key (continuing):`, deleteError);
+        }
+        // Fall through to create new key
       }
     }
   } catch (error) {
     console.log(`Could not list API keys for ${agentId}:`, error);
   }
 
-  // Only create if no key exists
+  // Create new key (either no key existed or we just deleted the old one)
   console.log(`Creating access key: "${name}"...`);
   const keyResponse = await createAccessKey(agentId, name);
   const key = keyResponse.api_key_info?.secret_key ||

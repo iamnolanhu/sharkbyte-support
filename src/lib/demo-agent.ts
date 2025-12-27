@@ -25,38 +25,59 @@ import { APP_DOMAIN } from './config';
 const demoAgentCache = new Map<string, Promise<DemoAgentResult>>();
 
 /**
- * Set agent visibility to public in the background (non-blocking).
- * Polls for agent endpoint availability before attempting visibility update.
- *
- * This runs as a fire-and-forget operation - it won't block the main flow.
- * Logs success when visibility is set, otherwise silently continues polling.
+ * Wait for agent endpoint to be provisioned by DigitalOcean.
+ * Returns the endpoint URL when ready, or empty string on timeout.
  */
-async function setVisibilityAsync(agentId: string): Promise<void> {
-  const maxAttempts = 20; // Up to 10 min (30s × 20)
-  const intervalMs = 30000; // 30 seconds
+async function waitForEndpoint(agentId: string, timeoutMs = 180000): Promise<string> {
+  const pollInterval = 10000; // 10 seconds
+  const startTime = Date.now();
+  let attempts = 0;
 
-  for (let i = 0; i < maxAttempts; i++) {
+  console.log(`  Waiting for agent endpoint (up to ${timeoutMs / 60000} minutes)...`);
+
+  while (Date.now() - startTime < timeoutMs) {
     try {
       const agentInfo = await getAgent(agentId);
       const endpoint = agentInfo.agent.deployment?.url || agentInfo.agent.endpoint;
 
       if (endpoint) {
-        await updateAgentVisibility(agentId, 'VISIBILITY_PUBLIC');
-        console.log(`  ✓ Agent set to public`);
-        return;
+        console.log(`  ✓ Agent endpoint ready: ${endpoint}`);
+        return endpoint;
       }
 
-      // Only log every 3rd attempt to reduce noise
-      if (i % 3 === 0 && i > 0) {
-        const elapsed = i * 30;
-        console.log(`  Waiting for agent endpoint (${elapsed}s)...`);
+      attempts++;
+      if (attempts % 3 === 0) {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        console.log(`  Still waiting for endpoint (${elapsed}s elapsed)...`);
       }
     } catch {
       // Ignore errors - will retry
     }
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
   }
-  console.log(`  Note: Could not set public during init (status polling will retry)`);
+
+  console.log(`  ⚠ Endpoint not ready after ${timeoutMs / 60000} minutes (may still be deploying)`);
+  return '';
+}
+
+/**
+ * Set agent visibility to public. Waits for endpoint to be ready first.
+ * Returns the endpoint URL.
+ */
+async function setVisibilityAndGetEndpoint(agentId: string): Promise<string> {
+  // Wait for endpoint
+  const endpoint = await waitForEndpoint(agentId);
+
+  if (endpoint) {
+    try {
+      await updateAgentVisibility(agentId, 'VISIBILITY_PUBLIC');
+      console.log(`  ✓ Agent set to public`);
+    } catch {
+      console.log(`  Note: Could not set public (status polling will retry)`);
+    }
+  }
+
+  return endpoint;
 }
 
 export interface DemoAgentResult {
@@ -116,22 +137,27 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     if (existingAgent) {
       console.log(`Demo agent exists: ${existingAgent.uuid} (endpoint: ${existingAgent.endpoint || 'deploying...'})`);
 
-      // Try to set agent public if it has an endpoint
-      if (existingAgent.endpoint) {
+      // Get or create API key (reuses existing if secret in env, regenerates if not)
+      const { key: accessKey } = await getOrCreateAccessKey(existingAgent.uuid);
+
+      // If endpoint is not ready yet, wait for it
+      let endpoint = existingAgent.endpoint || '';
+      if (!endpoint) {
+        console.log(`  Waiting for existing agent endpoint...`);
+        endpoint = await setVisibilityAndGetEndpoint(existingAgent.uuid);
+      } else {
+        // Try to set agent public if it has an endpoint
         try {
           await updateAgentVisibility(existingAgent.uuid, 'VISIBILITY_PUBLIC');
           console.log(`  ✓ Agent set to public`);
-        } catch (err) {
+        } catch {
           console.log(`  Note: Could not set public (will retry during status polling)`);
         }
       }
 
-      // Get or create API key (reuses existing if found)
-      const { key: accessKey } = await getOrCreateAccessKey(existingAgent.uuid);
-
       return {
         agentId: existingAgent.uuid,
-        endpoint: existingAgent.endpoint || '', // May be empty if still deploying
+        endpoint,
         accessKey,
         isNew: false,
       };
@@ -217,12 +243,7 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     const { key: apiKey } = await getOrCreateAccessKey(agent.uuid);
     console.log(`  ✓ Access key created`);
 
-    // STEP 2: Start visibility polling in background (non-blocking)
-    // This runs async while we wait for DB - logs when visibility is set
-    console.log(`  Setting agent visibility to public (background)...`);
-    setVisibilityAsync(agent.uuid); // Fire and forget - don't await
-
-    // STEP 3: Wait for database to be ready (light ping - no scary errors)
+    // STEP 2: Wait for database to be ready (light ping - no scary errors)
     // This is the "proper" way to wait - checks KB's database_id field
     if (!kbWasExisting) {
       console.log(`  Waiting for database to provision (up to 10 minutes)...`);
@@ -235,7 +256,7 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
       console.log(`  Database already provisioned (existing KB)`);
     }
 
-    // STEP 4: Attach KB (should succeed now that DB is ready)
+    // STEP 3: Attach KB (should succeed now that DB is ready)
     console.log(`  Attaching KB to agent...`);
     try {
       await attachKnowledgeBaseToAgent(agent.uuid, crawlKBId);
@@ -244,16 +265,20 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
         attachError instanceof Error ? attachError.message : attachError);
     }
 
-    // STEP 5: Start indexing
+    // STEP 4: Start indexing
     console.log(`  Starting indexing job...`);
     await startIndexingJob(crawlKBId);
     console.log(`  ✓ Indexing started`);
+
+    // STEP 5: Wait for endpoint to be ready and set visibility to public
+    // This ensures the env summary shows the actual endpoint URL
+    const endpoint = await setVisibilityAndGetEndpoint(agent.uuid);
 
     console.log(`Demo agent created successfully`);
 
     return {
       agentId: agent.uuid,
-      endpoint: agent.endpoint || '',
+      endpoint,
       accessKey: apiKey,
       isNew: true,
     };

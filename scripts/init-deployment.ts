@@ -75,7 +75,25 @@ function areAllEnvVarsSet(): boolean {
 }
 
 /**
+ * Print environment variable if it's missing from process.env
+ * Returns the formatted line or empty string if already set
+ */
+function formatMissingVar(
+  envName: string,
+  value: string,
+  comment?: string
+): string {
+  // Skip if already set in environment
+  if (process.env[envName]) return '';
+
+  const c = colors;
+  const commentPart = comment ? `  ${c.dim}${comment}${c.reset}` : '';
+  return `   ${c.yellow}${envName}${c.reset}=${c.green}${value}${c.reset}${commentPart}`;
+}
+
+/**
  * Print the environment variable summary block with SharkByte branding
+ * Only shows vars that are MISSING from the environment
  */
 function printEnvSummary(
   projectId: string,
@@ -90,42 +108,51 @@ function printEnvSummary(
     return;
   }
 
+  const c = colors;
+
+  // Build list of missing required vars
+  const missingRequired = [
+    formatMissingVar('DO_API_TOKEN', '<your-token>', '# <https://cloud.digitalocean.com/account/api>'),
+  ].filter(Boolean);
+
+  // Build list of missing optimization vars
+  const missingOptimization = [
+    formatMissingVar('DO_PROJECT_ID', projectId),
+    formatMissingVar('DO_DATABASE_ID', databaseId || '<auto-provisioned>', '# <https://cloud.digitalocean.com/gen-ai/knowledge-bases>'),
+    formatMissingVar('DO_MODEL_ACCESS_KEY_ID', modelAccessKeyId || '<auto-created>', '# <https://cloud.digitalocean.com/gen-ai/model-access-keys>'),
+    formatMissingVar('NEXT_PUBLIC_DEMO_AGENT_ENDPOINT', demoEndpoint || '<pending>'),
+    formatMissingVar('NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY', demoAccessKey || '<pending>'),
+  ].filter(Boolean);
+
+  // If nothing is missing, just show success
+  if (missingRequired.length === 0 && missingOptimization.length === 0) {
+    console.log('\n✅ All environment variables are configured. Build optimized!\n');
+    return;
+  }
+
   console.log(SHARKBYTE_BANNER);
 
-  const domain = process.env.APP_DOMAIN || process.env.VERCEL_PROJECT_PRODUCTION_URL || '<auto-detected>';
-
-  const c = colors; // shorthand
-
-  // Format access key display - if empty (existing key, not retrievable), show helpful message
-  const accessKeyDisplay = demoAccessKey || '<retrieve-from-local-storage-or-regenerate>';
-
   console.log(`
-   ${c.blue}${c.bold}📋 SAVE THESE TO YOUR .env FILE AND VERCEL:${c.reset}
+   ${c.blue}${c.bold}📋 MISSING ENVIRONMENT VARIABLES:${c.reset}
    ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}
+`);
 
-   ${c.dim}# Required${c.reset}
-   ${c.yellow}DO_API_TOKEN${c.reset}=${c.dim}<your-token>${c.reset}  ${c.dim}# <https://cloud.digitalocean.com/account/api>${c.reset}
+  // Print missing required vars
+  if (missingRequired.length > 0) {
+    console.log(`   ${c.dim}# Required${c.reset}`);
+    missingRequired.forEach(line => console.log(line));
+    console.log('');
+  }
 
-   ${c.dim}# Speed Optimizations (Add to Vercel → Settings → Environment Variables)${c.reset}
-   ${c.yellow}DO_PROJECT_ID${c.reset}=${c.green}${projectId}${c.reset}
-   ${c.yellow}DO_DATABASE_ID${c.reset}=${c.green}${databaseId || '<auto-provisioned>'}${c.reset}  ${c.dim}# <https://cloud.digitalocean.com/gen-ai/knowledge-bases>${c.reset}
-   ${c.yellow}DO_MODEL_ACCESS_KEY_ID${c.reset}=${c.green}${modelAccessKeyId || '<auto-created>'}${c.reset}  ${c.dim}# <https://cloud.digitalocean.com/gen-ai/model-access-keys>${c.reset}
-   ${c.yellow}NEXT_PUBLIC_DEMO_AGENT_ENDPOINT${c.reset}=${c.green}${demoEndpoint}${c.reset}
-   ${c.yellow}NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY${c.reset}=${c.green}${accessKeyDisplay}${c.reset}
+  // Print missing optimization vars
+  if (missingOptimization.length > 0) {
+    console.log(`   ${c.dim}# Speed Optimizations (Add to Vercel → Settings → Environment Variables)${c.reset}`);
+    missingOptimization.forEach(line => console.log(line));
+    console.log('');
+  }
 
-   ${c.dim}# Optional - Domain Config${c.reset}
-   ${c.yellow}APP_DOMAIN${c.reset}=${c.green}${domain}${c.reset}
-
-   ${c.dim}# Optional - Model Config (defaults shown)${c.reset}
-   ${c.yellow}DO_REGION${c.reset}=${c.green}tor1${c.reset}
-   ${c.yellow}DO_EMBEDDING_MODEL_UUID${c.reset}=${c.green}22653204-79ed-11ef-bf8f-4e013e2ddde4${c.reset}
-   ${c.yellow}DO_LLM_MODEL_UUID${c.reset}=${c.green}18bc9b8f-73c5-11f0-b074-4e013e2ddde4${c.reset}
-
-   ${c.dim}# Optional - Firecrawl (SPA fallback for JS-rendered sites)${c.reset}
-   ${c.yellow}FIRECRAWL_API_KEY${c.reset}=${c.dim}<optional>${c.reset}  ${c.dim}# <https://firecrawl.dev>${c.reset}
-
-   ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}
-   ${c.blue}🌊 Once all required vars are set, this block will disappear! 🦈${c.reset}
+  console.log(`   ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}
+   ${c.blue}🌊 Add these to Vercel and this block will disappear! 🦈${c.reset}
    ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}
 `);
 }
