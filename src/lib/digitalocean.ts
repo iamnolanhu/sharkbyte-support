@@ -290,19 +290,37 @@ export async function getProjectId(): Promise<string> {
 let cachedDatabaseId: string | null = null;
 
 /**
- * Discovers an existing database by looking at Knowledge Bases.
+ * Discovers an existing database by looking at Knowledge Bases and Agents.
  * Since DO doesn't have a direct "list databases" API, we look at
- * existing KBs to find a database_id we can reuse.
+ * existing KBs and agents' attached KBs to find a database_id we can reuse.
  */
 async function discoverExistingDatabase(): Promise<string | null> {
   try {
+    // First try to discover from existing KBs
     const { knowledge_bases } = await listKnowledgeBases();
-
-    // Find a KB with a database_id
     for (const kb of knowledge_bases) {
       if (kb.database_id) {
         console.log(`Found existing database from KB "${kb.name}": ${kb.database_id}`);
         return kb.database_id;
+      }
+    }
+
+    // If no KBs have database_id, try to get from agents' attached KBs
+    // This handles the case where KBs were deleted but agents still reference a database
+    console.log('No database found in KBs, checking agents...');
+    const agents = await listAgents();
+    for (const agent of agents) {
+      const kbIds = getKnowledgeBaseIds(agent);
+      for (const kbId of kbIds) {
+        try {
+          const kbResponse = await getKnowledgeBase(kbId);
+          if (kbResponse.knowledge_base.database_id) {
+            console.log(`Found existing database from agent "${agent.name}" KB: ${kbResponse.knowledge_base.database_id}`);
+            return kbResponse.knowledge_base.database_id;
+          }
+        } catch {
+          // KB might not exist anymore, continue
+        }
       }
     }
 
@@ -414,6 +432,35 @@ async function createModelAccessKey(name: string): Promise<unknown> {
 }
 
 /**
+ * Regenerate a model access key to get a new secret
+ * This invalidates the previous secret and returns a new one
+ * @returns The new secret key
+ */
+async function regenerateModelAccessKey(keyUuid: string): Promise<string> {
+  const response = await fetch(
+    `${DO_CONFIG.API_BASE}/gen-ai/models/api_keys/${keyUuid}/regenerate`,
+    {
+      method: 'POST',
+      headers: getHeaders(),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Failed to regenerate model access key: ${JSON.stringify(error)}`);
+  }
+
+  const data = await response.json();
+  const keyData = data.api_key_info || data.model_access_key || data;
+
+  if (!keyData?.secret_key) {
+    throw new Error('Regenerate response missing secret_key');
+  }
+
+  return keyData.secret_key;
+}
+
+/**
  * Get or create a model access key by name.
  * This ensures the account has a model access key, which is required
  * before agents can use LLM models on fresh accounts.
@@ -436,14 +483,29 @@ export async function getOrCreateModelAccessKey(name: string = 'sharkbyte-suppor
 
   // 3. Check for existing key with this name
   const keys = await listModelAccessKeys();
+  console.log(`[getOrCreateModelAccessKey] Found ${keys.length} existing keys:`, keys.map(k => `${k.name} (${k.uuid})`));
   const existing = keys.find(k => k.name === name);
+  console.log(`[getOrCreateModelAccessKey] Looking for name "${name}", found: ${existing ? existing.uuid : 'none'}`);
 
   if (existing) {
     console.log(`Found existing model access key: "${name}" (${existing.uuid})`);
-    console.log('\n' + '='.repeat(60));
-    console.log('🔧 SETUP TIP: Add this to prevent duplicate key creation:');
-    console.log(`   DO_MODEL_ACCESS_KEY_ID=${existing.uuid}`);
-    console.log('='.repeat(60) + '\n');
+    // Regenerate the token since env var wasn't set (user needs fresh secret)
+    console.log(`Regenerating token for existing key...`);
+    try {
+      const newSecret = await regenerateModelAccessKey(existing.uuid);
+      console.log('\n' + '='.repeat(60));
+      console.log('🔑 REGENERATED SECRET KEY (save this - shown only once!):');
+      console.log(`   ${newSecret}`);
+      console.log('\n🔧 Add to Vercel env to skip regeneration next time:');
+      console.log(`   DO_MODEL_ACCESS_KEY_ID=${existing.uuid}`);
+      console.log('='.repeat(60) + '\n');
+    } catch (regenErr) {
+      console.warn(`Could not regenerate key (using existing): ${regenErr}`);
+      console.log('\n' + '='.repeat(60));
+      console.log('🔧 Add to Vercel env to use existing key:');
+      console.log(`   DO_MODEL_ACCESS_KEY_ID=${existing.uuid}`);
+      console.log('='.repeat(60) + '\n');
+    }
     cachedModelAccessKeyId = existing.uuid;
     return existing.uuid;
   }
@@ -1246,15 +1308,9 @@ export async function createAgent(
 
   const result: CreateAgentResponse = await response.json();
 
-  // Belt and suspenders: Try to set public visibility after creation
-  // in case the API ignored the visibility field during creation
-  try {
-    await updateAgentVisibility(result.agent.uuid, 'VISIBILITY_PUBLIC');
-    console.log(`Agent ${result.agent.uuid} visibility confirmed as PUBLIC`);
-  } catch (visErr) {
-    // Log but don't fail - agent is still usable, just might be private
-    console.log(`Note: Could not confirm agent visibility: ${visErr}`);
-  }
+  // Note: visibility is set in request body above.
+  // If agent doesn't deploy as public, agent-status polling will handle it
+  // after the agent is deployed (can't update visibility while deploying).
 
   return result;
 }
@@ -1274,23 +1330,23 @@ export async function listAgents(): Promise<GetAgentResponse['agent'][]> {
   return data.agents || [];
 }
 
-// Find an existing agent by exact domain match
+// Find an existing agent by domain (using .includes() for flexible matching)
 export async function findAgentByDomain(
   domain: string
 ): Promise<GetAgentResponse['agent'] | null> {
   const agents = await listAgents();
-  // Match agent with exact name "Sammy - {domain}"
-  const expectedName = `Sammy - ${domain}`.toLowerCase();
+  // Look for agent with name that includes the domain (case-insensitive)
+  // This is more flexible than exact matching and handles edge cases
+  const found = agents.find((agent) =>
+    agent.name.toLowerCase().includes(domain.toLowerCase())
+  ) || null;
 
-  // Log for debugging duplicate detection
-  const matchingAgents = agents.filter(a => a.name.toLowerCase() === expectedName);
-  if (matchingAgents.length > 1) {
-    console.warn(`[findAgentByDomain] WARNING: Found ${matchingAgents.length} agents matching "${expectedName}"!`);
-    matchingAgents.forEach(a => console.warn(`  - ${a.uuid}: ${a.name}`));
+  if (found) {
+    console.log(`[findAgentByDomain] Found agent for "${domain}": ${found.uuid} (${found.name})`);
+  } else {
+    console.log(`[findAgentByDomain] No agent found for "${domain}"`);
   }
 
-  const found = matchingAgents[0] || null;
-  console.log(`[findAgentByDomain] Looking for "${expectedName}", found: ${found ? found.uuid : 'none'}`);
   return found;
 }
 

@@ -72,11 +72,11 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
   console.log(`Checking for demo agent: ${domain}...`);
 
   try {
-    // Check if agent already exists
+    // Check if agent already exists (no endpoint required - agent may still be deploying)
     const existingAgent = await findAgentByDomain(domain);
 
-    if (existingAgent && existingAgent.endpoint) {
-      console.log(`Demo agent exists: ${existingAgent.uuid}`);
+    if (existingAgent) {
+      console.log(`Demo agent exists: ${existingAgent.uuid} (endpoint: ${existingAgent.endpoint || 'deploying...'})`);
 
       // Create a new API key for this session
       const keyResponse = await createAccessKey(existingAgent.uuid);
@@ -86,7 +86,7 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
 
       return {
         agentId: existingAgent.uuid,
-        endpoint: existingAgent.endpoint,
+        endpoint: existingAgent.endpoint || '', // May be empty if still deploying
         accessKey,
         isNew: false,
       };
@@ -118,7 +118,7 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     // Another request may have created the agent while we were waiting for KB/database
     console.log(`  Re-checking for existing agent before creation...`);
     const raceCheckAgent = await findAgentByDomain(domain);
-    if (raceCheckAgent && raceCheckAgent.endpoint) {
+    if (raceCheckAgent) {
       console.log(`  Agent was created by another request: ${raceCheckAgent.uuid}`);
       // Clean up the KB if we just created it and it's not needed
       if (!kbWasExisting) {
@@ -130,14 +130,14 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
           console.warn(`  Could not cleanup unused KB:`, cleanupErr);
         }
       }
-      // Return the existing agent
+      // Return the existing agent (endpoint may be empty if still deploying)
       const keyResponse = await createAccessKey(raceCheckAgent.uuid);
       const accessKey = keyResponse.api_key_info?.secret_key ||
                        keyResponse.access_key?.key ||
                        keyResponse.access_key?.api_key || '';
       return {
         agentId: raceCheckAgent.uuid,
-        endpoint: raceCheckAgent.endpoint,
+        endpoint: raceCheckAgent.endpoint || '',
         accessKey,
         isNew: false,
       };
@@ -209,7 +209,7 @@ export async function getDemoAgentInfo(domain?: string): Promise<DemoAgentResult
   try {
     const existingAgent = await findAgentByDomain(resolvedDomain);
 
-    if (existingAgent && existingAgent.endpoint) {
+    if (existingAgent) {
       const keyResponse = await createAccessKey(existingAgent.uuid);
       const accessKey = keyResponse.api_key_info?.secret_key ||
                        keyResponse.access_key?.key ||
@@ -217,7 +217,7 @@ export async function getDemoAgentInfo(domain?: string): Promise<DemoAgentResult
 
       return {
         agentId: existingAgent.uuid,
-        endpoint: existingAgent.endpoint,
+        endpoint: existingAgent.endpoint || '', // May be empty if still deploying
         accessKey,
         isNew: false,
       };
