@@ -1630,20 +1630,16 @@ export async function getOrCreateAccessKey(
                       keys.find(k => k.name?.startsWith('sharkbyte-key'));
 
       if (existing) {
-        // Check if we have the secret in env - if so, we can reuse the key
-        if (process.env.NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY) {
-          console.log(`Found existing access key: "${existing.name}" (secret in env)`);
-          return { key: '', isNew: false };
+        // Existing key found - always reuse it (never regenerate)
+        // The secret was only shown at creation time and can't be retrieved
+        console.log(`Found existing access key: "${existing.name}"`);
+        if (!process.env.NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY) {
+          console.log(`  ⚠ Secret not in env - check previous build log or delete key to regenerate`);
         }
-
-        // Secret not in env - regenerate to ensure build log shows the key
-        console.log(`Found existing access key but secret not in env - regenerating...`);
-        try {
-          await deleteAccessKey(agentId, existing.uuid);
-        } catch (deleteError) {
-          console.warn(`Could not delete old key (continuing):`, deleteError);
-        }
-        // Fall through to create new key
+        return {
+          key: process.env.NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY || '',
+          isNew: false
+        };
       }
     }
   } catch (error) {
