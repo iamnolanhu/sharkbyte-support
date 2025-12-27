@@ -138,7 +138,8 @@ export interface ListedApiKey {
 }
 
 export interface ListAccessKeysResponse {
-  api_keys: ListedApiKey[];
+  api_keys?: ListedApiKey[];
+  api_key_infos?: ListedApiKey[];  // DO API may return this field instead
 }
 
 // ============================================

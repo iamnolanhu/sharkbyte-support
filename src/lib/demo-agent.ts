@@ -15,6 +15,7 @@ import {
   generateCrawlKBName,
   deleteKnowledgeBase,
   getOrCreateKnowledgeBase,
+  updateAgentVisibility,
 } from './digitalocean';
 import { APP_DOMAIN } from './config';
 
@@ -77,6 +78,16 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
 
     if (existingAgent) {
       console.log(`Demo agent exists: ${existingAgent.uuid} (endpoint: ${existingAgent.endpoint || 'deploying...'})`);
+
+      // Try to set agent public if it has an endpoint
+      if (existingAgent.endpoint) {
+        try {
+          await updateAgentVisibility(existingAgent.uuid, 'VISIBILITY_PUBLIC');
+          console.log(`  ✓ Agent set to public`);
+        } catch (err) {
+          console.log(`  Note: Could not set public (will retry during status polling)`);
+        }
+      }
 
       // Get or create API key (reuses existing if found)
       const { key: accessKey } = await getOrCreateAccessKey(existingAgent.uuid);

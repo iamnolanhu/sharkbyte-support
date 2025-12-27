@@ -1518,7 +1518,8 @@ export async function getOrCreateAccessKey(
   try {
     // Check for existing keys with matching name
     const existingKeys = await listAccessKeys(agentId);
-    const keys = existingKeys.api_keys || [];
+    // Handle both possible field names from DO API (api_key_infos or api_keys)
+    const keys = existingKeys.api_key_infos || existingKeys.api_keys || [];
 
     if (keys.length > 0) {
       console.log(`Agent ${agentId} has ${keys.length} existing API keys`);
@@ -1577,14 +1578,16 @@ export async function testContentQuality(
   }
 
   try {
-    // Create temporary access key
-    const keyResponse = await createAccessKey(agentId);
-    const accessKey =
-      keyResponse.api_key_info?.secret_key ||
-      keyResponse.access_key?.key ||
-      '';
+    // Get or create access key for quality testing
+    // Use dedicated name to avoid creating many keys
+    const { key: accessKey, isNew } = await getOrCreateAccessKey(agentId, 'sharkbyte-quality-test');
 
     if (!accessKey) {
+      // Existing key found but secret not available (only returned on creation)
+      // Skip quality test - content will be trusted
+      if (!isNew) {
+        return { isLowQuality: false, reason: 'Using existing key, skipping quality check' };
+      }
       return { isLowQuality: false, reason: 'Could not create access key' };
     }
 
