@@ -290,6 +290,14 @@ export async function getProjectId(): Promise<string> {
 let cachedDatabaseId: string | null = null;
 
 /**
+ * Get the current database ID from cache or env (sync - no API calls)
+ * Returns undefined if not yet discovered
+ */
+export function getCachedDatabaseId(): string | undefined {
+  return DO_CONFIG.DATABASE_ID || cachedDatabaseId || undefined;
+}
+
+/**
  * Discovers an existing database by looking at Knowledge Bases and Agents.
  * Since DO doesn't have a direct "list databases" API, we look at
  * existing KBs and agents' attached KBs to find a database_id we can reuse.
@@ -392,6 +400,14 @@ interface CreateModelAccessKeyResponse {
 
 // Module-level cache for model access key ID
 let cachedModelAccessKeyId: string | null = null;
+
+/**
+ * Get the current model access key ID from cache or env (sync - no API calls)
+ * Returns undefined if not yet discovered
+ */
+export function getCachedModelAccessKeyId(): string | undefined {
+  return DO_CONFIG.MODEL_ACCESS_KEY_ID || cachedModelAccessKeyId || undefined;
+}
 
 /**
  * List all model access keys in the account

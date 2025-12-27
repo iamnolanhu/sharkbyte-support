@@ -5,7 +5,7 @@
  * This script runs during the build phase (prebuild) to:
  * 1. Discover or create the DigitalOcean project
  * 2. Discover or create the demo agent
- * 3. Log environment variables for manual setup
+ * 3. Display environment variable summary for setup
  *
  * Usage:
  *   npx tsx scripts/init-deployment.ts
@@ -19,8 +19,94 @@
  *   APP_DOMAIN - Custom domain (fallback: VERCEL_PROJECT_PRODUCTION_URL)
  */
 
-import { getProjectId } from '../src/lib/digitalocean';
+// Load environment variables from .env files (for local development)
+import 'dotenv/config';
+
+import { getProjectId, getCachedDatabaseId, getCachedModelAccessKeyId } from '../src/lib/digitalocean';
 import { ensureDemoAgent, getDeploymentDomain } from '../src/lib/demo-agent';
+
+// SharkByte-themed ASCII banner for env setup
+const SHARKBYTE_BANNER = `
+
+   🦈 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 🦈
+   ┃                                                                              ┃
+   ┃   ███████╗██╗  ██╗ █████╗ ██████╗ ██╗  ██╗██████╗ ██╗   ██╗████████╗███████╗ ┃
+   ┃   ██╔════╝██║  ██║██╔══██╗██╔══██╗██║ ██╔╝██╔══██╗╚██╗ ██╔╝╚══██╔══╝██╔════╝ ┃
+   ┃   ███████╗███████║███████║██████╔╝█████╔╝ ██████╔╝ ╚████╔╝    ██║   █████╗   ┃
+   ┃   ╚════██║██╔══██║██╔══██║██╔══██╗██╔═██╗ ██╔══██╗  ╚██╔╝     ██║   ██╔══╝   ┃
+   ┃   ███████║██║  ██║██║  ██║██║  ██║██║  ██╗██████╔╝   ██║      ██║   ███████╗ ┃
+   ┃   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝    ╚═╝      ╚═╝   ╚══════╝ ┃
+   ┃                                                                              ┃
+   ┃                     🌊 ENVIRONMENT SETUP GUIDE 🌊                           ┃
+   ┃                                                                              ┃
+   🦈 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 🦈
+`;
+
+/**
+ * Check if all recommended environment variables are set
+ */
+function areAllEnvVarsSet(): boolean {
+  const recommendedVars = [
+    'DO_API_TOKEN',
+    'DO_PROJECT_ID',
+    'DO_DATABASE_ID',
+    'NEXT_PUBLIC_DEMO_AGENT_ENDPOINT',
+    'NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY',
+  ];
+
+  return recommendedVars.every(v => !!process.env[v]);
+}
+
+/**
+ * Print the environment variable summary block with SharkByte branding
+ */
+function printEnvSummary(
+  projectId: string,
+  databaseId: string | undefined,
+  modelAccessKeyId: string | undefined,
+  demoEndpoint: string,
+  demoAccessKey: string
+) {
+  // If all vars are already set, show success and skip the block
+  if (areAllEnvVarsSet()) {
+    console.log('\n✅ All environment variables are configured. Build optimized!\n');
+    return;
+  }
+
+  console.log(SHARKBYTE_BANNER);
+
+  const domain = process.env.APP_DOMAIN || process.env.VERCEL_PROJECT_PRODUCTION_URL || '<auto-detected>';
+
+  console.log(`
+   📋 SAVE THESE TO YOUR .env FILE AND VERCEL:
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   # Required (you should already have this)
+   DO_API_TOKEN=<your-token>
+
+   # Speed Optimizations (Add to Vercel → Settings → Environment Variables)
+   DO_PROJECT_ID=${projectId}
+   DO_DATABASE_ID=${databaseId || '<auto-created-on-first-kb>'}
+   DO_MODEL_ACCESS_KEY_ID=${modelAccessKeyId || '<auto-created>'}
+   NEXT_PUBLIC_DEMO_AGENT_ENDPOINT=${demoEndpoint}
+   NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY=${demoAccessKey}
+
+   # Optional - Domain Config
+   APP_DOMAIN=${domain}
+
+   # Optional - Model Config (defaults shown)
+   DO_REGION=tor1
+   DO_EMBEDDING_MODEL_UUID=22653204-79ed-11ef-bf8f-4e013e2ddde4
+   DO_LLM_MODEL_UUID=18bc9b8f-73c5-11f0-b074-4e013e2ddde4
+
+   # Optional - Firecrawl (SPA fallback for JS-rendered sites)
+   FIRECRAWL_API_KEY=<optional>
+
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   🌊 Once all required vars are set, this block will disappear! 🦈
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`);
+}
 
 async function initializeDeployment() {
   console.log('\n🦈 SharkByte Support - Deployment Initialization\n');
@@ -66,17 +152,20 @@ async function initializeDeployment() {
     }
     console.log(`  ✓ Endpoint: ${demoAgent.endpoint}`);
 
-    // Log environment variables for manual setup
-    console.log('\n' + '='.repeat(50));
-    console.log('\n📋 Add these to your Vercel Environment Variables:\n');
-    console.log('  (Settings → Environment Variables → Add)\n');
-    console.log(`  DO_PROJECT_ID=${projectId}`);
-    console.log(`  NEXT_PUBLIC_DEMO_AGENT_ENDPOINT=${demoAgent.endpoint}`);
-    console.log(`  NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY=${demoAgent.accessKey}`);
-    console.log('\n' + '='.repeat(50));
-    console.log('\n✅ Initialization complete!');
-    console.log('\nNote: The demo widget will work without these vars via runtime fallback,');
-    console.log('but adding them will make the widget load faster.\n');
+    // Get additional IDs for summary
+    const databaseId = getCachedDatabaseId();
+    const modelAccessKeyId = getCachedModelAccessKeyId();
+
+    // Print the environment variable summary block
+    printEnvSummary(
+      projectId,
+      databaseId,
+      modelAccessKeyId,
+      demoAgent.endpoint,
+      demoAgent.accessKey
+    );
+
+    console.log('✅ Initialization complete!\n');
 
   } catch (error) {
     console.error('\n❌ Initialization failed:', error);
