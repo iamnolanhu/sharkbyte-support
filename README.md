@@ -153,9 +153,20 @@ Add the chat widget to any website with a single script tag:
 
 ## Deployment
 
+> **Cost Notice:** Running SharkByte requires a DigitalOcean account with Gradient AI enabled. Estimated costs: ~$20/month for the vector database + variable AI usage. [Get $200 in free credits](https://www.digitalocean.com/?refcode=732d9583cca9) to get started.
+
+> **First-Time Setup:** Fresh DO accounts must [create one agent manually](https://cloud.digitalocean.com/gen-ai/agents/new) before API-based creation works.
+
 Deploy to Vercel with one click:
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/iamnolanhu/sharkbyte-support)
+
+Then add `DO_API_TOKEN` to your environment variables.
+
+**See [DEPLOYMENT.md](DEPLOYMENT.md) for the complete deployment guide**, including:
+- Step-by-step setup instructions
+- Post-deployment optimization (prevent duplicate resources)
+- Troubleshooting common issues
 
 Or deploy manually:
 
