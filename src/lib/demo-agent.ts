@@ -17,6 +17,7 @@ import {
   getOrCreateKnowledgeBase,
   updateAgentVisibility,
   attachKnowledgeBaseToAgent,
+  getAgent,
 } from './digitalocean';
 import { APP_DOMAIN } from './config';
 
@@ -180,10 +181,10 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     const agent = agentResponse.agent;
     console.log(`Agent created: ${agent.uuid}`);
 
-    // Wait for agent to initialize before KB attachment
+    // Wait for agent AND database to initialize before KB attachment
     // (DO API may need time before agent accepts KB attachments)
-    console.log(`  Waiting for agent to initialize...`);
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    console.log(`  Waiting for agent and database to initialize...`);
+    await new Promise(resolve => setTimeout(resolve, 10000)); // Increased from 3s to 10s
 
     // Attach KB explicitly (DO API ignores knowledge_base_ids in create request)
     console.log(`  Attaching KB ${crawlKBId} to agent...`);
@@ -202,17 +203,34 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     console.log(`Starting indexing job on crawl KB...`);
     await startIndexingJob(crawlKBId);
 
-    // Wait for agent deployment before setting visibility
-    // (DO API requires endpoint to exist before visibility can be set)
-    console.log(`  Waiting for agent deployment...`);
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    // Try to set visibility with polling (agent needs endpoint before visibility can be set)
+    console.log(`  Setting agent visibility to public...`);
+    let visibilitySet = false;
+    for (let i = 0; i < 6; i++) {
+      try {
+        // Check if agent has endpoint yet
+        const agentInfo = await getAgent(agent.uuid);
+        const endpoint = agentInfo.agent.deployment?.url || agentInfo.agent.endpoint;
 
-    // Attempt to set visibility (may fail if still deploying - status polling will retry)
-    try {
-      await updateAgentVisibility(agent.uuid, 'VISIBILITY_PUBLIC');
-      console.log(`  ✓ Agent set to public`);
-    } catch (err) {
-      console.log(`  Note: Could not set public yet (status polling will retry)`);
+        if (endpoint) {
+          await updateAgentVisibility(agent.uuid, 'VISIBILITY_PUBLIC');
+          console.log(`  ✓ Agent set to public`);
+          visibilitySet = true;
+          break;
+        }
+
+        console.log(`  Waiting for agent endpoint (${i + 1}/6)...`);
+        await new Promise(resolve => setTimeout(resolve, 10000));
+      } catch (err) {
+        console.log(`  Could not set public yet (attempt ${i + 1}/6)`);
+        if (i < 5) {
+          await new Promise(resolve => setTimeout(resolve, 10000));
+        }
+      }
+    }
+
+    if (!visibilitySet) {
+      console.log(`  Note: Could not set public during init (status polling will retry)`);
     }
 
     console.log(`Demo agent created successfully`);

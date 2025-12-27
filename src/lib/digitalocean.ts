@@ -971,8 +971,9 @@ export async function uploadContentToKB(
  * the database is still initializing after provisioning.
  */
 export async function startIndexingJob(kbId: string): Promise<void> {
-  const maxRetries = 5;
-  const retryDelays = [5000, 10000, 15000, 20000, 30000]; // 5s, 10s, 15s, 20s, 30s
+  // Increased: DB provisioning can take 2-3 minutes for new databases
+  const maxRetries = 12;
+  const retryDelays = [5000, 10000, 15000, 20000, 25000, 30000, 30000, 30000, 30000, 30000, 30000, 30000]; // ~4 min total
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const response = await fetchWithRetry(
@@ -1134,8 +1135,8 @@ export async function isKBReady(kbId: string): Promise<{ ready: boolean; reason?
 export async function attachKnowledgeBaseToAgent(
   agentId: string,
   kbId: string,
-  maxRetries = 3,
-  initialDelayMs = 2000
+  maxRetries = 10,        // Increased: DB provisioning can take several minutes
+  initialDelayMs = 5000   // Increased: Give more time between retries
 ): Promise<void> {
   let lastError: Error | null = null;
 
