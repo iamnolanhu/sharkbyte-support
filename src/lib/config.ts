@@ -48,8 +48,10 @@ export const DO_CONFIG = {
 } as const;
 
 // App Domain Configuration - set via environment variable for different deployments
-// Defaults to production domain if not set
-export const APP_DOMAIN = process.env.APP_DOMAIN || 'sharkbyte-support.vercel.app';
+// Falls back to Vercel's auto-detected production URL, then to default
+export const APP_DOMAIN = process.env.APP_DOMAIN
+  || process.env.VERCEL_PROJECT_PRODUCTION_URL
+  || 'sharkbyte-support.vercel.app';
 
 // Demo Agent Configuration (uses APP_DOMAIN)
 export const DEMO_AGENT_CONFIG = {

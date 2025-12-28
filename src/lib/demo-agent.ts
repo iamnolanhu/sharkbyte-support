@@ -258,23 +258,24 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
       console.log(`  [Step 2/5] Verifying database availability (existing KB)...`);
     }
 
-    // STEP 3: Attach KB (may need to wait for DB to be fully ready)
-    const attachTimeout = isNewDatabase ? 300000 : 120000; // 5 min for new DB, 2 min for existing
-    console.log(`  [Step 3/5] Attaching KB to agent (may take ${isNewDatabase ? '5' : '2'} minutes while DB becomes available)...`);
+    // STEP 3: Start indexing FIRST (this is the TRUE database readiness check)
+    // The database_id appearing doesn't mean DB is ready - indexing success does
+    const indexingNote = isNewDatabase
+      ? 'Starting indexing (waiting for database to be fully ready)...'
+      : 'Starting indexing...';
+    console.log(`  [Step 3/5] ${indexingNote}`);
+    await startIndexingJob(crawlKBId);
+    console.log(`  ✓ Indexing started - database is ready!`);
+
+    // STEP 4: Attach KB (should succeed now that DB is ready from indexing)
+    const attachTimeout = isNewDatabase ? 120000 : 60000; // 2 min for new DB, 1 min for existing
+    console.log(`  [Step 4/5] Attaching KB to agent...`);
     try {
       await attachKnowledgeBaseToAgent(agent.uuid, crawlKBId, attachTimeout);
     } catch (attachError) {
       console.warn(`  ⚠ KB attachment failed (auto-repair will handle):`,
         attachError instanceof Error ? attachError.message : attachError);
     }
-
-    // STEP 4: Start indexing (final database readiness check)
-    const indexingNote = isNewDatabase
-      ? 'Starting indexing (up to 5 minutes)...'
-      : 'Starting indexing...';
-    console.log(`  [Step 4/5] ${indexingNote}`);
-    await startIndexingJob(crawlKBId);
-    console.log(`  ✓ Indexing started - database is ready!`);
 
     // STEP 5: Wait for endpoint to be ready and set visibility to public
     console.log(`  [Step 5/5] Waiting for endpoint deployment...`);
