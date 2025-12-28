@@ -31,6 +31,7 @@ export default function Home() {
   const [error, setError] = useState<string>('');
   const [pollCount, setPollCount] = useState(0);
   const [statusMessage, setStatusMessage] = useState<string>(''); // Dynamic status from API
+  const [isSubmitting, setIsSubmitting] = useState(false); // Prevents double-submit
 
   // Poll for agent status when indexing (with timeout)
   useEffect(() => {
@@ -104,7 +105,14 @@ export default function Home() {
   }, [step, agentData, router]);
 
   const handleSubmit = async (url: string) => {
+    // Prevent double-submit
+    if (isSubmitting) {
+      console.log('[handleSubmit] Already submitting, ignoring');
+      return;
+    }
+
     console.log('[handleSubmit] Starting with URL:', url);
+    setIsSubmitting(true);
     setStep('creating');
     setError('');
     setPollCount(0);
@@ -167,6 +175,7 @@ export default function Home() {
       console.error('[handleSubmit] Error:', err);
       setStep('error');
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
+      setIsSubmitting(false); // Allow retry on error
     }
   };
 
@@ -235,7 +244,7 @@ export default function Home() {
             </motion.div>
 
             {/* URL Input */}
-            <UrlInput onSubmit={handleSubmit} isLoading={false} />
+            <UrlInput onSubmit={handleSubmit} isLoading={isSubmitting} />
 
             {/* Error Display */}
             {step === 'error' && error && (
@@ -250,6 +259,7 @@ export default function Home() {
                     setStep('idle');
                     setError('');
                     setAgentData(null);
+                    setIsSubmitting(false);
                   }}
                   className="mt-2 text-sm text-primary hover:underline"
                 >

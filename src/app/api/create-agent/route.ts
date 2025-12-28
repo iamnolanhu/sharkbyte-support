@@ -15,8 +15,14 @@ import {
   getOrCreateKnowledgeBase,
   attachKnowledgeBaseToAgent,
   deleteKnowledgeBase,
+  estimateSiteSize,
 } from '@/lib/digitalocean';
+import { CRAWLER_CONFIG } from '@/lib/config';
 import type { CreateAgentRequest, CreateAgentApiResponse } from '@/types';
+
+// In-memory lock to prevent duplicate concurrent agent creations for the same domain
+// Key: domain, Value: Promise that resolves to the response
+const creationLocks = new Map<string, Promise<NextResponse>>();
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,6 +38,72 @@ export async function POST(request: NextRequest) {
 
     const normalizedUrl = normalizeUrl(body.url);
     const domain = extractDomain(normalizedUrl);
+
+    // Check for in-progress creation for this domain (prevents race condition duplicates)
+    const existingLock = creationLocks.get(domain);
+    if (existingLock) {
+      console.log(`[Lock] Creation already in progress for ${domain}, waiting...`);
+      return existingLock;
+    }
+
+    // Create a promise that will be resolved when creation completes
+    let resolveLock!: (response: NextResponse) => void;
+    let rejectLock!: (error: Error) => void;
+    const lockPromise = new Promise<NextResponse>((resolve, reject) => {
+      resolveLock = resolve;
+      rejectLock = reject;
+    });
+    creationLocks.set(domain, lockPromise);
+    console.log(`[Lock] Acquired lock for ${domain}`);
+
+    try {
+      const response = await createAgentInternal(normalizedUrl, domain);
+      resolveLock(response);
+      return response;
+    } catch (error) {
+      const errorResponse = NextResponse.json(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        },
+        { status: 500 }
+      );
+      resolveLock(errorResponse);
+      return errorResponse;
+    } finally {
+      creationLocks.delete(domain);
+      console.log(`[Lock] Released lock for ${domain}`);
+    }
+  } catch (error) {
+    console.error('Error creating agent:', error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// Internal function that does the actual agent creation work
+async function createAgentInternal(normalizedUrl: string, domain: string): Promise<NextResponse> {
+    // Dynamically estimate site size before crawling (console-only warnings)
+    const siteSize = await estimateSiteSize(normalizedUrl);
+    console.log(`Site size estimate: ${siteSize.estimate} (${siteSize.reason})`);
+
+    if (siteSize.estimate === 'mega' || siteSize.estimate === 'large') {
+      const urlPath = new URL(normalizedUrl).pathname;
+      const urlCount = siteSize.urlCount?.toLocaleString() || 'many';
+
+      if (urlPath === '/' || urlPath === '') {
+        console.warn(`⚠️  COST WARNING: Large site detected (${urlCount} URLs)`);
+        console.warn(`   ${siteSize.reason}`);
+        console.warn(`   Consider using a specific path like ${normalizedUrl}/docs/`);
+      } else {
+        console.warn(`ℹ️  Large site crawling specific path: ${urlPath}`);
+      }
+    }
 
     // Step 1: Check if agent already exists for this domain
     console.log(`Checking for existing agent for domain: ${domain}...`);
@@ -72,10 +144,16 @@ export async function POST(request: NextRequest) {
     const crawlKBName = generateCrawlKBName(normalizedUrl);
     console.log(`Checking for existing KB: ${crawlKBName}...`);
 
+    // Calculate max pages based on site size to control costs
+    const sizeKey = siteSize.estimate as keyof typeof CRAWLER_CONFIG.MAX_PAGES_BY_SIZE;
+    const maxPages = CRAWLER_CONFIG.MAX_PAGES_BY_SIZE[sizeKey] || CRAWLER_CONFIG.MAX_PAGES_BY_SIZE.medium;
+    console.log(`Using max_pages: ${maxPages} for ${siteSize.estimate} site`);
+
     const { kb: crawlKB, isExisting: kbExists } = await getOrCreateKnowledgeBase({
       name: crawlKBName,
       seedUrls: [normalizedUrl],
       url: normalizedUrl,
+      maxPages,
     });
     const crawlKBId = crawlKB.uuid;
 
@@ -191,14 +269,4 @@ export async function POST(request: NextRequest) {
       ...response,
       url: normalizedUrl,
     });
-  } catch (error) {
-    console.error('Error creating agent:', error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
-    );
-  }
 }

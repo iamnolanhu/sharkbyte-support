@@ -19,9 +19,10 @@ export const DO_CONFIG = {
   // Set this after first deployment to reuse existing key
   MODEL_ACCESS_KEY_ID: process.env.DO_MODEL_ACCESS_KEY_ID || null,
 
-  // Default embedding model UUID (Alibaba-NLP/gte-large-en-v1.5)
+  // Default embedding model UUID (Qwen3 Embedding 0.6B - $0.04/1M tokens)
+  // Alternative: gte-large-en-v1.5 ($0.09/1M), All MiniLM L6 v2 ($0.01/1M)
   DEFAULT_EMBEDDING_MODEL_UUID:
-    process.env.DO_EMBEDDING_MODEL_UUID || '22653204-79ed-11ef-bf8f-4e013e2ddde4',
+    process.env.DO_EMBEDDING_MODEL_UUID || 'bb3ab4ee-d9b5-11f0-b074-4e013e2ddde4',
 
   // Default LLM model UUID (OpenAI GPT-oss-120b - works via API)
   // Note: gpt-4o (9a364867-f300-11ef-bf8f-4e013e2ddde4) does NOT work via API
@@ -99,6 +100,14 @@ export const CRAWLER_CONFIG = {
   INCLUDE_NAVIGATION_LINKS: true,
   // Minimum indexed items to consider KB has useful content
   MIN_USEFUL_ITEMS: 1,
+  // Maximum pages to crawl based on site size estimate
+  // Prevents runaway costs on large sites (supabase.com was $1.21 with 13M tokens)
+  MAX_PAGES_BY_SIZE: {
+    small: 500,   // Small sites - crawl everything
+    medium: 200,  // Medium sites - good coverage
+    large: 100,   // Large sites - focus on main content
+    mega: 50,     // Mega sites - minimal to prevent cost blowout
+  },
 } as const;
 
 // Firecrawl Configuration (fallback for SPAs/JS sites)

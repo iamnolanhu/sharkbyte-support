@@ -61,7 +61,7 @@
     'height: 100%',
     'border: none',
     'background: transparent',
-    'border-radius: 16px',
+    'border-radius: 50%',
   ].join(';');
   iframe.allow = 'clipboard-write';
   iframe.title = 'SharkByte Chat Widget';
@@ -76,7 +76,8 @@
 
     if (data.type === 'sharkbyte:open') {
       container.style.width = (data.payload.width || 380) + 'px';
-      container.style.height = (data.payload.height || 520) + 'px';
+      container.style.height = (data.payload.height || 500) + 'px';
+      iframe.style.borderRadius = '16px';
       // Reset position for normal mode
       container.style.bottom = '16px';
       if (config.position === 'bottom-right') {
@@ -89,6 +90,7 @@
     } else if (data.type === 'sharkbyte:close') {
       container.style.width = (data.payload.width || 64) + 'px';
       container.style.height = (data.payload.height || 64) + 'px';
+      iframe.style.borderRadius = '50%';
       // Reset position for closed mode
       container.style.bottom = '16px';
       if (config.position === 'bottom-right') {
@@ -105,6 +107,7 @@
       container.style.bottom = '16px';
       container.style.left = '16px';
       container.style.right = '16px';
+      iframe.style.borderRadius = '16px';
     } else if (data.type === 'sharkbyte:resize') {
       if (data.payload.width) container.style.width = data.payload.width;
       if (data.payload.height) container.style.height = data.payload.height;

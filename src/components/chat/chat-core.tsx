@@ -43,10 +43,21 @@ export function useChat({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll to bottom when messages or streaming content changes
+  // Refs for RAF batching (avoids excessive re-renders during streaming)
+  const rafIdRef = useRef<number | null>(null);
+  const pendingContentRef = useRef<string>('');
+
+  // Auto-scroll when messages array changes (use 'auto' to avoid animation conflicts with DOM changes)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+  }, [messages]);
+
+  // Scroll during streaming (also instant to keep up with content)
+  useEffect(() => {
+    if (streamingContent) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    }
+  }, [streamingContent]);
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
@@ -78,6 +89,21 @@ export function useChat({
       const decoder = new TextDecoder();
       let accumulated = '';
 
+      // RAF-based batching: accumulate deltas and update state once per frame
+      // This reduces renders from 50-200+ per response to ~20-30 (one per 16ms frame)
+      const scheduleUpdate = () => {
+        if (rafIdRef.current === null) {
+          rafIdRef.current = requestAnimationFrame(() => {
+            if (pendingContentRef.current) {
+              accumulated += pendingContentRef.current;
+              setStreamingContent(accumulated);
+              pendingContentRef.current = '';
+            }
+            rafIdRef.current = null;
+          });
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -90,8 +116,9 @@ export function useChat({
             try {
               const data = JSON.parse(line.slice(2));
               if (data.textDelta) {
-                accumulated += data.textDelta;
-                setStreamingContent(accumulated);
+                // Batch deltas instead of updating state immediately
+                pendingContentRef.current += data.textDelta;
+                scheduleUpdate();
               }
             } catch {
               // Ignore parse errors
@@ -99,6 +126,14 @@ export function useChat({
           }
         }
       }
+
+      // Flush any remaining content after stream ends
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      accumulated += pendingContentRef.current;
+      pendingContentRef.current = '';
 
       setMessages((prev) => [...prev, { role: 'assistant', content: accumulated }]);
       setStreamingContent('');

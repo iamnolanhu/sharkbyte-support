@@ -98,7 +98,7 @@ export function EmbedChatWidget({
         height = window.innerHeight - 32;
       } else {
         width = 380;
-        height = 520;
+        height = 500;
       }
     }
 

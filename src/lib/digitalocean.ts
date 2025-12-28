@@ -746,17 +746,210 @@ export async function checkSitemapExists(baseUrl: string): Promise<boolean> {
   }
 }
 
+// ============================================
+// Dynamic Site Size Estimation
+// ============================================
+
+export type SiteSizeEstimate = 'small' | 'medium' | 'large' | 'mega' | 'unknown';
+
+export interface SiteSizeInfo {
+  estimate: SiteSizeEstimate;
+  urlCount?: number;
+  hasSitemapIndex?: boolean;
+  reason: string;
+}
+
+// Patterns that indicate user-generated or dynamic content (likely large sites)
+const LARGE_SITE_PATTERNS = [
+  /\/u\/|\/user\/|\/users\//i,        // User profiles
+  /\/@[^/]+/,                          // Social handles
+  /\/r\/|\/t\/|\/c\//,                 // Subreddits, topics, categories
+  /\/p\/\d+|\/post\/\d+/,              // Posts with IDs
+  /\/page\/\d+|\?page=\d+/,            // Pagination
+  /\/\d{4}\/\d{2}\//,                  // Date archives (2024/01/)
+  /\/archive\//i,                      // Archive pages
+  /\/tag\/|\/tags\//i,                 // Tag pages
+  /\/category\/|\/categories\//i,      // Category pages
+];
+
+/**
+ * Analyze homepage to estimate site size when no sitemap exists.
+ * Counts internal links and looks for patterns indicating large sites.
+ */
+async function analyzeHomepage(baseUrl: string): Promise<SiteSizeInfo> {
+  try {
+    const response = await fetch(baseUrl, {
+      headers: { 'User-Agent': 'SharkByte-Crawler/1.0' },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      return { estimate: 'unknown', reason: 'Could not fetch homepage' };
+    }
+
+    const html = await response.text();
+    const domain = new URL(baseUrl).hostname;
+
+    // Extract all href links
+    const linkMatches = html.match(/href=["']([^"']+)["']/gi) || [];
+    const links = linkMatches
+      .map(m => m.match(/href=["']([^"']+)["']/i)?.[1])
+      .filter(Boolean) as string[];
+
+    // Filter to internal links only
+    const internalLinks = new Set<string>();
+    for (const link of links) {
+      try {
+        const url = new URL(link, baseUrl);
+        if (url.hostname === domain || url.hostname.endsWith(`.${domain}`)) {
+          internalLinks.add(url.pathname);
+        }
+      } catch {
+        // Relative URL - count it
+        if (link.startsWith('/')) {
+          internalLinks.add(link.split('?')[0].split('#')[0]);
+        }
+      }
+    }
+
+    const uniqueLinkCount = internalLinks.size;
+
+    // Check for large-site patterns in the links
+    const hasLargeSitePatterns = [...internalLinks].some(link =>
+      LARGE_SITE_PATTERNS.some(pattern => pattern.test(link))
+    );
+
+    // Check for navigation depth indicators
+    const hasDeepNavigation = [...internalLinks].some(link =>
+      (link.match(/\//g) || []).length > 4
+    );
+
+    // Estimate based on link count and patterns
+    if (hasLargeSitePatterns && uniqueLinkCount > 50) {
+      return {
+        estimate: 'mega',
+        urlCount: uniqueLinkCount,
+        reason: `Homepage has ${uniqueLinkCount} links with UGC/archive patterns`,
+      };
+    }
+    if (uniqueLinkCount > 200 || (hasDeepNavigation && uniqueLinkCount > 100)) {
+      return {
+        estimate: 'large',
+        urlCount: uniqueLinkCount,
+        reason: `Homepage has ${uniqueLinkCount} internal links`,
+      };
+    }
+    if (uniqueLinkCount > 50) {
+      return {
+        estimate: 'medium',
+        urlCount: uniqueLinkCount,
+        reason: `Homepage has ${uniqueLinkCount} internal links`,
+      };
+    }
+    return {
+      estimate: 'small',
+      urlCount: uniqueLinkCount,
+      reason: `Homepage has ${uniqueLinkCount} internal links`,
+    };
+  } catch (error) {
+    return {
+      estimate: 'unknown',
+      reason: `Could not analyze homepage: ${error instanceof Error ? error.message : 'unknown'}`,
+    };
+  }
+}
+
+/**
+ * Dynamically estimate site size using multiple strategies:
+ * 1. Try sitemap.xml first (most accurate)
+ * 2. Fall back to homepage analysis (link counting + pattern detection)
+ */
+export async function estimateSiteSize(baseUrl: string): Promise<SiteSizeInfo> {
+  const normalizedUrl = baseUrl.replace(/\/$/, '');
+
+  // Strategy 1: Try sitemap.xml
+  try {
+    const sitemapUrl = `${normalizedUrl}/sitemap.xml`;
+    const response = await fetch(sitemapUrl, {
+      headers: { 'User-Agent': 'SharkByte-Crawler/1.0' },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (response.ok) {
+      const xml = await response.text();
+
+      // Check if it's a sitemap index
+      if (xml.includes('<sitemapindex') || xml.includes(':sitemapindex')) {
+        const sitemapCount = (xml.match(/<sitemap>/gi) || []).length;
+        const estimatedUrls = sitemapCount * 10000;
+        return {
+          estimate: sitemapCount > 10 ? 'mega' : 'large',
+          hasSitemapIndex: true,
+          urlCount: estimatedUrls,
+          reason: `Sitemap index with ${sitemapCount} sitemaps (~${estimatedUrls.toLocaleString()} URLs)`,
+        };
+      }
+
+      // Count URLs in regular sitemap
+      const urlCount = (xml.match(/<url>/gi) || []).length;
+      if (urlCount > 0) {
+        if (urlCount > 5000) return { estimate: 'mega', urlCount, reason: `Sitemap has ${urlCount.toLocaleString()} URLs` };
+        if (urlCount > 500) return { estimate: 'large', urlCount, reason: `Sitemap has ${urlCount.toLocaleString()} URLs` };
+        if (urlCount > 100) return { estimate: 'medium', urlCount, reason: `Sitemap has ${urlCount.toLocaleString()} URLs` };
+        return { estimate: 'small', urlCount, reason: `Sitemap has ${urlCount} URLs` };
+      }
+    }
+  } catch {
+    // Sitemap fetch failed - continue to homepage analysis
+  }
+
+  // Strategy 2: Analyze homepage links
+  console.log('No sitemap found, analyzing homepage...');
+  return analyzeHomepage(normalizedUrl);
+}
+
 export async function createKnowledgeBaseSmartCrawl(
   options: CreateKBOptions
 ): Promise<CreateKBResponse> {
   const baseUrl = options.seedUrls[0];
 
-  // Use DOMAIN crawl for broadest coverage and fastest initial results
-  // Navigation links are included for better link discovery
-  console.log(`Creating KB with DOMAIN crawl for ${baseUrl}`);
+  // Always use PATH crawl - it follows links within the URL path
+  // SCOPED would only index a single page (useless for websites)
+  // DOMAIN would crawl the entire site (too expensive)
+  const crawlOption = 'PATH';
+  const crawlUrl = baseUrl;
+
+  // Extract path for logging
+  let urlPath = '/';
+  try {
+    urlPath = new URL(baseUrl).pathname;
+  } catch {
+    // Invalid URL, use default
+  }
+
+  if (urlPath === '/' || urlPath === '') {
+    console.log(`Using PATH crawl for root URL: ${baseUrl}`);
+  } else {
+    console.log(`Using PATH crawl for ${urlPath}: ${baseUrl}`);
+  }
 
   // Get project ID (auto-discovers/creates if not set)
   const projectId = await getProjectId();
+
+  // Build web crawler data source config
+  const webCrawlerConfig: Record<string, unknown> = {
+    base_url: crawlUrl,
+    crawling_option: crawlOption,
+    embed_media: CRAWLER_CONFIG.EMBED_MEDIA,
+    exclude_tags: CRAWLER_CONFIG.EXCLUDE_TAGS,
+    include_navigation_links: CRAWLER_CONFIG.INCLUDE_NAVIGATION_LINKS,
+  };
+
+  // Add max_pages if specified (cost control for large sites)
+  if (options.maxPages) {
+    webCrawlerConfig.max_pages = options.maxPages;
+    console.log(`Limiting crawl to max ${options.maxPages} pages`);
+  }
 
   // Build request body
   const requestBody: Record<string, unknown> = {
@@ -766,13 +959,7 @@ export async function createKnowledgeBaseSmartCrawl(
     region: DO_CONFIG.DEFAULT_REGION,
     datasources: [
       {
-        web_crawler_data_source: {
-          base_url: baseUrl,
-          crawling_option: 'DOMAIN',
-          embed_media: CRAWLER_CONFIG.EMBED_MEDIA,
-          exclude_tags: CRAWLER_CONFIG.EXCLUDE_TAGS,
-          include_navigation_links: CRAWLER_CONFIG.INCLUDE_NAVIGATION_LINKS,
-        },
+        web_crawler_data_source: webCrawlerConfig,
       },
     ],
   };

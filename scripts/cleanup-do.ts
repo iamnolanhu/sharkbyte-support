@@ -40,6 +40,41 @@ const getFlagValue = (flag: string): string | null => {
   return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : null;
 };
 
+// Show help before requiring token
+if (hasFlag('--help') || hasFlag('-h')) {
+  console.log(`\x1b[36m🦈 SharkByte Cleanup Script\x1b[0m
+
+\x1b[33mUsage:\x1b[0m
+  npm run cleanup                               Interactive mode
+  npm run cleanup -- --token <token> [options]  Use specific DO account
+  npm run cleanup:help                          Show this help
+
+\x1b[33mToken Options:\x1b[0m
+  --token <token>        Use different DO API token (overrides DO_API_TOKEN env var)
+
+\x1b[33mPreservation Flags:\x1b[0m
+  --keep-db              Keep vector database (~$20/mo to re-provision)
+  --keep-demo            Keep demo agent (Sammy - {domain}) and its KBs
+  --keep-workspaces      Keep all workspaces
+  --keep-model-keys      Keep model access keys
+  --keep-project         Keep the SharkByte Support project
+  --keep-agent <pattern> Keep agents matching pattern (* and ? wildcards)
+  --keep-kb <pattern>    Keep KBs matching pattern (* and ? wildcards)
+
+\x1b[33mControl Flags:\x1b[0m
+  --dry-run              Preview what would be deleted (no changes)
+  --force                Skip interactive prompts, delete immediately
+  --orphans-only         Only delete orphan KBs and broken agents
+
+\x1b[33mExamples:\x1b[0m
+  npm run cleanup -- --token dop_v1_xxx                    # Different account
+  npm run cleanup -- --keep-db --keep-demo                 # Keep DB and demo
+  npm run cleanup -- --dry-run                             # Preview only
+  npm run cleanup -- --token dop_v1_xxx --keep-db --force  # Full control
+`);
+  process.exit(0);
+}
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -49,7 +84,11 @@ const DO_API_TOKEN = getFlagValue('--token') || process.env.DO_API_TOKEN;
 const APP_DOMAIN = process.env.APP_DOMAIN || 'sharkbyte-support.vercel.app';
 
 if (!DO_API_TOKEN) {
-  console.error('Error: DO_API_TOKEN required. Set env var or use --token flag');
+  console.error(`\x1b[31mError:\x1b[0m DO_API_TOKEN required.
+
+  npm run cleanup -- --token <your-token>   Use specific token
+  npm run cleanup:help                      Show all options
+`);
   process.exit(1);
 }
 
@@ -404,34 +443,6 @@ async function main() {
     force: hasFlag('--force'),
     orphansOnly: hasFlag('--orphans-only'),
   };
-
-  // Show help
-  if (hasFlag('--help') || hasFlag('-h')) {
-    console.log(`Usage: npx tsx scripts/cleanup-do.ts [options]
-
-Options:
-  --token <token>        Use a different DO API token (overrides env var)
-  --keep-db              Preserve the vector database
-  --keep-demo            Keep the demo agent and its KBs
-  --keep-workspaces      Preserve all workspaces
-  --keep-model-keys      Preserve model access keys
-  --keep-project         Preserve the SharkByte Support project
-  --keep-agent <pattern> Keep agents matching pattern (supports * and ?)
-  --keep-kb <pattern>    Keep KBs matching pattern (supports * and ?)
-  --dry-run              Preview what would be deleted
-  --force                Skip interactive mode and confirmation
-  --orphans-only         Only delete orphan KBs and broken agents
-  --help, -h             Show this help message
-
-Examples:
-  npm run cleanup                           # Interactive mode
-  npm run cleanup -- --keep-db --keep-demo  # Keep database and demo
-  npm run cleanup -- --dry-run              # Preview only
-  npm run cleanup -- --token dop_v1_xxx     # Use different account
-  npm run cleanup -- --force                # Delete everything
-`);
-    return;
-  }
 
   // Fetch all resources
   console.log('\x1b[34mFetching resources from DigitalOcean...\x1b[0m\n');

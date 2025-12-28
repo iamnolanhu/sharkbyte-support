@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "cleanup": "npx tsx scripts/cleanup-do.ts",
+    "cleanup:help": "npx tsx scripts/cleanup-do.ts --help",
     "create-agent": "npx tsx scripts/create-first-agent.ts",
     "init": "npx tsx scripts/init-deployment.ts"
   },
