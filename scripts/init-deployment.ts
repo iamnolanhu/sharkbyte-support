@@ -175,7 +175,7 @@ function printEnvSummary(
 
   // Print missing optimization vars
   if (missingOptimization.length > 0) {
-    console.log(`   ${c.dim}# Speed Optimizations - Add to Vercel → Settings → Environment Variables${c.reset}`);
+    console.log(`   ${c.dim}# Speed Optimizations - Add to .env (local) AND Vercel Settings (production)${c.reset}`);
     missingOptimization.forEach(line => console.log(line));
     console.log('');
   }
@@ -201,8 +201,24 @@ function printEnvSummary(
     console.log('');
   }
 
+  // Print helpful links section
+  console.log(`   ${c.dim}# Helpful Links${c.reset}`);
+  console.log(`   ${c.dim}• DigitalOcean API Tokens:${c.reset} https://cloud.digitalocean.com/account/api/tokens`);
+  console.log(`   ${c.dim}• DO Knowledge Bases:${c.reset} https://cloud.digitalocean.com/gen-ai/knowledge-bases`);
+  console.log(`   ${c.dim}• DO Model Access Keys:${c.reset} https://cloud.digitalocean.com/gen-ai/model-access-keys`);
+  console.log(`   ${c.dim}• Firecrawl API (optional):${c.reset} https://firecrawl.dev`);
+  console.log('');
+
   console.log(`   ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}
-   ${c.blue}🌊 Add these to Vercel and this block will disappear! 🦈${c.reset}
+
+   ${c.blue}${c.bold}📁 FOR LOCAL DEVELOPMENT:${c.reset}
+   ${c.dim}   Save these to your ${c.reset}.env${c.dim} file (copy from .env.example)${c.reset}
+
+   ${c.blue}${c.bold}🚀 FOR PRODUCTION (VERCEL):${c.reset}
+   ${c.dim}   Add to: Vercel Dashboard → Settings → Environment Variables${c.reset}
+
+   ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}
+   ${c.blue}🦈 Add these to both places and this block will disappear! 🌊${c.reset}
    ${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}
 `);
 }
