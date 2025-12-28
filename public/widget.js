@@ -27,8 +27,10 @@
     return;
   }
 
-  // Base URL for the widget
-  var baseUrl = 'https://sharkbyte-support.vercel.app';
+  // Base URL for the widget (use localhost for development)
+  var baseUrl = script.src.includes('localhost')
+    ? 'http://localhost:3000'
+    : 'https://sharkbyte-support.vercel.app';
 
   // Create container
   var container = document.createElement('div');

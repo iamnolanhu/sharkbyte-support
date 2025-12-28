@@ -5,19 +5,26 @@ export const metadata: Metadata = {
   description: 'AI-powered support chat widget',
 };
 
+// Note: Don't include <html>/<body> tags - those come from root layout
+// This layout just provides embed-specific styling
 export default function EmbedLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-      </head>
-      <body style={{ margin: 0, padding: 0, background: 'transparent' }}>
-        {children}
-      </body>
-    </html>
+    <div
+      style={{
+        margin: 0,
+        padding: 0,
+        background: 'transparent',
+        height: '100vh',
+        width: '100vw',
+        overflow: 'hidden',
+      }}
+      data-embed-container="true"
+    >
+      {children}
+    </div>
   );
 }

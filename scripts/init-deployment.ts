@@ -130,7 +130,7 @@ function printEnvSummary(
   // Build list of missing model configuration vars (defaults shown)
   const missingModelConfig = [
     formatMissingVar('DO_REGION', 'tor1', '# Only tor1 supports gen-ai agents'),
-    formatMissingVar('DO_EMBEDDING_MODEL_UUID', '22653204-79ed-11ef-bf8f-4e013e2ddde4', '# gte-large-en-v1.5'),
+    formatMissingVar('DO_EMBEDDING_MODEL_UUID', 'bb3ab4ee-d9b5-11f0-b074-4e013e2ddde4', '# Qwen3 Embedding 0.6B'),
     formatMissingVar('DO_LLM_MODEL_UUID', '18bc9b8f-73c5-11f0-b074-4e013e2ddde4', '# GPT-oss-120b'),
   ].filter(Boolean);
 

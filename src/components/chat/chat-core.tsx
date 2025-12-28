@@ -22,6 +22,7 @@ export interface UseChatReturn {
   isLoading: boolean;
   streamingContent: string;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
+  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   handleKeyDown: (e: React.KeyboardEvent) => void;
 }
@@ -41,21 +42,31 @@ export function useChat({
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Refs for RAF batching (avoids excessive re-renders during streaming)
   const rafIdRef = useRef<number | null>(null);
   const pendingContentRef = useRef<string>('');
 
-  // Auto-scroll when messages array changes (use 'auto' to avoid animation conflicts with DOM changes)
+  // Helper to scroll messages container to bottom
+  // Uses direct ref to scroll container for reliability
+  const scrollToBottom = () => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  };
+
+  // Auto-scroll when messages array changes
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    scrollToBottom();
   }, [messages]);
 
-  // Scroll during streaming (also instant to keep up with content)
+  // Scroll during streaming
   useEffect(() => {
     if (streamingContent) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      scrollToBottom();
     }
   }, [streamingContent]);
 
@@ -137,6 +148,13 @@ export function useChat({
 
       setMessages((prev) => [...prev, { role: 'assistant', content: accumulated }]);
       setStreamingContent('');
+
+      // Multiple scroll attempts with delays to catch any layout shifts
+      // This ensures scroll stays at bottom even after async rendering completes
+      scrollToBottom();
+      setTimeout(scrollToBottom, 0);
+      setTimeout(scrollToBottom, 50);
+      setTimeout(scrollToBottom, 150);
     } catch (error) {
       console.error('Chat error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -169,6 +187,7 @@ export function useChat({
     isLoading,
     streamingContent,
     messagesEndRef,
+    scrollContainerRef,
     inputRef,
     handleKeyDown,
   };

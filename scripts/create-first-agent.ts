@@ -12,7 +12,7 @@ const DO_API_BASE = 'https://api.digitalocean.com/v2';
 const DO_API_TOKEN = process.env.DO_API_TOKEN;
 const DO_REGION = process.env.DO_REGION || 'tor1';
 const DO_DATABASE_ID = process.env.DO_DATABASE_ID;
-const DO_EMBEDDING_MODEL_UUID = process.env.DO_EMBEDDING_MODEL_UUID || '22653204-79ed-11ef-bf8f-4e013e2ddde4';
+const DO_EMBEDDING_MODEL_UUID = process.env.DO_EMBEDDING_MODEL_UUID || 'bb3ab4ee-d9b5-11f0-b074-4e013e2ddde4'; // Qwen3 Embedding 0.6B
 const DO_LLM_MODEL_UUID = process.env.DO_LLM_MODEL_UUID || '9a364867-f300-11ef-bf8f-4e013e2ddde4'; // GPT-4o
 
 // Agent configuration

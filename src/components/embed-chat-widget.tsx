@@ -5,7 +5,6 @@ import { Streamdown } from 'streamdown';
 import type { BundledTheme } from 'shiki';
 import {
   type Theme,
-  type ChatMessage,
   themes,
   getAccentColor,
   CHAT_CONSTANTS,
@@ -57,6 +56,7 @@ export function EmbedChatWidget({
     isLoading,
     streamingContent,
     messagesEndRef,
+    scrollContainerRef,
     inputRef,
     handleKeyDown,
   } = useChat({
@@ -133,10 +133,6 @@ export function EmbedChatWidget({
     return <WavesIcon />;
   };
 
-  const positionStyle = position === 'bottom-right'
-    ? { right: '16px' }
-    : { left: '16px' };
-
   return (
     <>
       <style>{`
@@ -154,20 +150,22 @@ export function EmbedChatWidget({
         ${getOceanDecorationsStyles()}
       `}</style>
 
+      {/* Fill the entire iframe - widget.js handles external positioning */}
       <div
         style={{
-          position: 'fixed',
-          bottom: '16px',
-          ...positionStyle,
-          zIndex: 9999,
+          width: '100%',
+          height: '100vh',
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: position === 'bottom-right' ? 'flex-end' : 'flex-start',
           fontFamily: 'system-ui, -apple-system, sans-serif',
         }}
       >
         {isOpen ? (
           <div
             style={{
-              width: isMaximized ? 'calc(100vw - 32px)' : 'min(380px, calc(100vw - 32px))',
-              height: isMaximized ? 'calc(100vh - 32px)' : 'min(500px, calc(100vh - 100px))',
+              width: isMaximized ? '100%' : '380px',
+              height: isMaximized ? '100%' : '500px',
               background: colors.bgGradient,
               borderRadius: '16px',
               boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
@@ -275,6 +273,7 @@ export function EmbedChatWidget({
 
             {/* Messages */}
             <div
+              ref={scrollContainerRef}
               style={{
                 flex: 1,
                 overflowY: 'auto',

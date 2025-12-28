@@ -195,7 +195,7 @@ APP_DOMAIN=                         # Custom domain (auto-detected from Vercel)
 
 ```env
 DO_REGION=tor1                      # Only tor1 supports gen-ai
-DO_EMBEDDING_MODEL_UUID=            # Default: gte-large-en-v1.5
+DO_EMBEDDING_MODEL_UUID=            # Default: Qwen3 Embedding 0.6B
 DO_LLM_MODEL_UUID=                  # Default: GPT-oss-120b
 FIRECRAWL_API_KEY=                  # Fallback for JS-rendered sites
 ```

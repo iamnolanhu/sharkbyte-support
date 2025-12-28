@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { usePathname } from 'next/navigation';
 import { ChatWidget } from './chat-widget';
 
 interface DemoConfig {
@@ -16,11 +17,20 @@ interface DemoConfig {
  * 2. Fallback: Fetches from /api/demo-config (lazy initialization)
  */
 export function DemoChatWidget() {
+  const pathname = usePathname();
   const [config, setConfig] = useState<DemoConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Check if we're on an embed route
+  const isEmbedRoute = pathname?.startsWith('/embed');
+
   useEffect(() => {
+    // Skip fetching config on embed routes
+    if (isEmbedRoute) {
+      setLoading(false);
+      return;
+    }
     // Fast path: check env vars first (they're baked into client bundle at build time)
     const envEndpoint = process.env.NEXT_PUBLIC_DEMO_AGENT_ENDPOINT;
     const envAccessKey = process.env.NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY;
@@ -55,10 +65,10 @@ export function DemoChatWidget() {
     };
 
     fetchConfig();
-  }, []);
+  }, [isEmbedRoute]);
 
-  // Show nothing while loading or on error
-  if (loading || error || !config) {
+  // Show nothing while loading, on error, or on embed routes
+  if (loading || error || !config || isEmbedRoute) {
     return null;
   }
 

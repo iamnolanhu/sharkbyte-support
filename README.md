@@ -103,7 +103,7 @@ DO_API_TOKEN=your_digitalocean_api_token      # https://cloud.digitalocean.com/a
 
 # DigitalOcean Gradient AI
 DO_REGION=tor1                                 # Only tor1 supports gen-ai agents
-DO_EMBEDDING_MODEL_UUID=22653204-79ed-11ef-bf8f-4e013e2ddde4  # gte-large (default)
+DO_EMBEDDING_MODEL_UUID=bb3ab4ee-d9b5-11f0-b074-4e013e2ddde4  # Qwen3 (default)
 DO_LLM_MODEL_UUID=18bc9b8f-73c5-11f0-b074-4e013e2ddde4        # GPT-oss-120b (default)
 
 # Optional (auto-discovered if not set)
