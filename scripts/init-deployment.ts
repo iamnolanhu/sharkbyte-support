@@ -100,7 +100,8 @@ function printEnvSummary(
   databaseId: string | undefined,
   modelAccessKeyId: string | undefined,
   demoEndpoint: string,
-  demoAccessKey: string
+  demoAccessKey: string,
+  domain: string
 ) {
   // If all vars are already set, show success and skip the block
   if (areAllEnvVarsSet()) {
@@ -112,20 +113,46 @@ function printEnvSummary(
 
   // Build list of missing required vars
   const missingRequired = [
-    formatMissingVar('DO_API_TOKEN', '<your-token>', '# <https://cloud.digitalocean.com/account/api>'),
+    formatMissingVar('DO_API_TOKEN', '<your-token>', '# https://cloud.digitalocean.com/account/api'),
   ].filter(Boolean);
 
-  // Build list of missing optimization vars
+  // Build list of missing optimization vars (auto-discovered values)
   const missingOptimization = [
     formatMissingVar('DO_PROJECT_ID', projectId),
-    formatMissingVar('DO_DATABASE_ID', databaseId || '<auto-provisioned>', '# <https://cloud.digitalocean.com/gen-ai/knowledge-bases>'),
-    formatMissingVar('DO_MODEL_ACCESS_KEY_ID', modelAccessKeyId || '<auto-created>', '# <https://cloud.digitalocean.com/gen-ai/model-access-keys>'),
+    formatMissingVar('DO_DATABASE_ID', databaseId || '<auto-provisioned>', '# https://cloud.digitalocean.com/gen-ai/knowledge-bases'),
+    formatMissingVar('DO_MODEL_ACCESS_KEY_ID', modelAccessKeyId || '<auto-created>', '# https://cloud.digitalocean.com/gen-ai/model-access-keys'),
     formatMissingVar('NEXT_PUBLIC_DEMO_AGENT_ENDPOINT', demoEndpoint || '<pending>'),
     formatMissingVar('NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY', demoAccessKey || '<pending>'),
   ].filter(Boolean);
 
+  // Build list of missing model configuration vars (defaults shown)
+  const missingModelConfig = [
+    formatMissingVar('DO_REGION', 'tor1', '# Only tor1 supports gen-ai agents'),
+    formatMissingVar('DO_EMBEDDING_MODEL_UUID', '22653204-79ed-11ef-bf8f-4e013e2ddde4', '# gte-large-en-v1.5'),
+    formatMissingVar('DO_LLM_MODEL_UUID', '18bc9b8f-73c5-11f0-b074-4e013e2ddde4', '# GPT-oss-120b'),
+  ].filter(Boolean);
+
+  // Build list of missing domain configuration
+  const missingDomainConfig = [
+    formatMissingVar('APP_DOMAIN', domain, '# Auto-detected from VERCEL_PROJECT_PRODUCTION_URL'),
+  ].filter(Boolean);
+
+  // Build list of missing optional services
+  const missingOptionalServices = [
+    formatMissingVar('FIRECRAWL_API_KEY', '<your-firecrawl-key>', '# https://firecrawl.dev - For SPA/JS site fallback'),
+  ].filter(Boolean);
+
+  // Gather all missing vars
+  const allMissing = [
+    ...missingRequired,
+    ...missingOptimization,
+    ...missingModelConfig,
+    ...missingDomainConfig,
+    ...missingOptionalServices,
+  ];
+
   // If nothing is missing, just show success
-  if (missingRequired.length === 0 && missingOptimization.length === 0) {
+  if (allMissing.length === 0) {
     console.log('\n✅ All environment variables are configured. Build optimized!\n');
     return;
   }
@@ -146,8 +173,29 @@ function printEnvSummary(
 
   // Print missing optimization vars
   if (missingOptimization.length > 0) {
-    console.log(`   ${c.dim}# Speed Optimizations (Add to Vercel → Settings → Environment Variables)${c.reset}`);
+    console.log(`   ${c.dim}# Speed Optimizations - Add to Vercel → Settings → Environment Variables${c.reset}`);
     missingOptimization.forEach(line => console.log(line));
+    console.log('');
+  }
+
+  // Print missing model configuration vars
+  if (missingModelConfig.length > 0) {
+    console.log(`   ${c.dim}# Model Configuration (defaults shown - customize if needed)${c.reset}`);
+    missingModelConfig.forEach(line => console.log(line));
+    console.log('');
+  }
+
+  // Print missing domain configuration
+  if (missingDomainConfig.length > 0) {
+    console.log(`   ${c.dim}# Domain Configuration${c.reset}`);
+    missingDomainConfig.forEach(line => console.log(line));
+    console.log('');
+  }
+
+  // Print missing optional services
+  if (missingOptionalServices.length > 0) {
+    console.log(`   ${c.dim}# Optional Services${c.reset}`);
+    missingOptionalServices.forEach(line => console.log(line));
     console.log('');
   }
 
@@ -220,7 +268,8 @@ async function initializeDeployment() {
       databaseId,
       modelAccessKeyId,
       demoAgent.endpoint,
-      demoAgent.accessKey
+      demoAgent.accessKey,
+      domain
     );
 
     console.log(`${c.green}${c.bold}🦈 Initialization complete!${c.reset}\n`);

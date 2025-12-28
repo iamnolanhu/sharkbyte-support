@@ -245,7 +245,8 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
 
     // STEP 2: Wait for database to be ready (light ping - no scary errors)
     // This checks KB's database_id field and assigns DB to project when found
-    if (!kbWasExisting) {
+    const isNewDatabase = !kbWasExisting;
+    if (isNewDatabase) {
       console.log(`  [Step 2/5] Waiting for database provisioning (up to 10 minutes)...`);
       console.log(`    Note: This is normal for new deployments - database takes 5-10 minutes to provision`);
       try {
@@ -254,20 +255,24 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
         console.log(`    Database may still be provisioning (continuing anyway)`);
       }
     } else {
-      console.log(`  [Step 2/5] Database already provisioned (existing KB)`);
+      console.log(`  [Step 2/5] Verifying database availability (existing KB)...`);
     }
 
-    // STEP 3: Attach KB (should succeed now that DB is ready)
-    console.log(`  [Step 3/5] Attaching KB to agent...`);
+    // STEP 3: Attach KB (may need to wait for DB to be fully ready)
+    const attachTimeout = isNewDatabase ? 300000 : 120000; // 5 min for new DB, 2 min for existing
+    console.log(`  [Step 3/5] Attaching KB to agent (may take ${isNewDatabase ? '5' : '2'} minutes while DB becomes available)...`);
     try {
-      await attachKnowledgeBaseToAgent(agent.uuid, crawlKBId);
+      await attachKnowledgeBaseToAgent(agent.uuid, crawlKBId, attachTimeout);
     } catch (attachError) {
       console.warn(`  ⚠ KB attachment failed (auto-repair will handle):`,
         attachError instanceof Error ? attachError.message : attachError);
     }
 
-    // STEP 4: Start indexing (this is the TRUE database readiness check)
-    console.log(`  [Step 4/5] Starting indexing (waiting for database - up to 10 minutes)...`);
+    // STEP 4: Start indexing (final database readiness check)
+    const indexingNote = isNewDatabase
+      ? 'Starting indexing (up to 5 minutes)...'
+      : 'Starting indexing...';
+    console.log(`  [Step 4/5] ${indexingNote}`);
     await startIndexingJob(crawlKBId);
     console.log(`  ✓ Indexing started - database is ready!`);
 

@@ -340,7 +340,7 @@ export async function assignDatabaseToProject(databaseId: string, projectId: str
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({
-          resources: [`do:database:${databaseId}`]
+          resources: [`do:dbaas:${databaseId}`]
         }),
       }
     );
@@ -1289,7 +1289,7 @@ export async function attachKnowledgeBaseToAgent(
         const isDbNotReady = responseText.includes('failed to link');
         if (isDbNotReady) {
           const elapsed = Math.round((Date.now() - startTime) / 1000);
-          console.log(`  ⏳ KB attachment waiting (${elapsed}s elapsed)...`);
+          console.log(`  ⏳ Waiting for database to be fully ready (${elapsed}s elapsed)...`);
           lastError = new Error(`Failed to attach KB to agent: ${responseText}`);
           await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
           continue;
