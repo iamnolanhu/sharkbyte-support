@@ -22,6 +22,8 @@
 // Load environment variables from .env files (for local development)
 import 'dotenv/config';
 
+import { writeFileSync } from 'fs';
+import { join } from 'path';
 import {
   getProjectId,
   getCachedDatabaseId,
@@ -249,6 +251,23 @@ async function initializeDeployment() {
       console.log(`  ${c.green}✓ Demo agent found:${c.reset} ${demoAgent.agentId}`);
     }
     console.log(`  ${c.green}✓ Endpoint:${c.reset} ${demoAgent.endpoint || `${c.dim}(deploying...)${c.reset}`}`);
+
+    // Write demo config to file for fast runtime access (avoids API timeout on first load)
+    if (demoAgent.endpoint && demoAgent.accessKey) {
+      try {
+        const configPath = join(process.cwd(), '.demo-config.json');
+        writeFileSync(configPath, JSON.stringify({
+          endpoint: demoAgent.endpoint,
+          accessKey: demoAgent.accessKey,
+          agentId: demoAgent.agentId,
+          domain: domain,
+          createdAt: new Date().toISOString(),
+        }, null, 2));
+        console.log(`  ${c.green}✓ Demo config saved${c.reset} ${c.dim}(enables instant widget load)${c.reset}`);
+      } catch (err) {
+        console.warn(`  ${c.yellow}⚠ Could not save demo config:${c.reset}`, err);
+      }
+    }
 
     // Discover resources for env summary (especially important on redeploy)
     // These functions check cache first, then discover from existing resources

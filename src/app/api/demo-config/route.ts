@@ -2,17 +2,22 @@
  * Demo Config API Endpoint
  *
  * Returns the demo agent configuration for the chat widget.
- * Uses lazy initialization as fallback if NEXT_PUBLIC env vars aren't set.
+ * Uses a tiered fallback strategy:
+ * 1. Fast: NEXT_PUBLIC env vars (baked into client bundle)
+ * 2. Fast: .demo-config.json file (written during prebuild)
+ * 3. Slow: Lazy initialization via ensureDemoAgent() (may timeout)
  *
  * GET /api/demo-config
- * Returns: { endpoint: string, accessKey: string }
+ * Returns: { endpoint: string, accessKey: string, source: string }
  */
 
 import { NextResponse } from 'next/server';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
 import { ensureDemoAgent, getDeploymentDomain } from '@/lib/demo-agent';
 
 export async function GET() {
-  // Fast path: env vars are set
+  // Fast path 1: env vars are set (baked into build)
   if (process.env.NEXT_PUBLIC_DEMO_AGENT_ENDPOINT && process.env.NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY) {
     return NextResponse.json({
       endpoint: process.env.NEXT_PUBLIC_DEMO_AGENT_ENDPOINT,
@@ -21,7 +26,25 @@ export async function GET() {
     });
   }
 
-  // Fallback: lazy initialization
+  // Fast path 2: config file from prebuild (instant read, no API calls)
+  const configPath = join(process.cwd(), '.demo-config.json');
+  if (existsSync(configPath)) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (config.endpoint && config.accessKey) {
+        console.log(`[demo-config] Loaded from file for domain: ${config.domain}`);
+        return NextResponse.json({
+          endpoint: config.endpoint,
+          accessKey: config.accessKey,
+          source: 'file',
+        });
+      }
+    } catch (err) {
+      console.warn('[demo-config] Failed to read config file:', err);
+    }
+  }
+
+  // Slow fallback: lazy initialization (may timeout on serverless)
   try {
     const domain = getDeploymentDomain();
     console.log(`[demo-config] Lazy init for domain: ${domain}`);

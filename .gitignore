@@ -31,6 +31,9 @@ yarn-error.log*
 *.pem
 Thumbs.db
 
+# Generated at build time
+.demo-config.json
+
 # IDE
 .idea/
 .vscode/
