@@ -326,6 +326,40 @@ async function listDatabases(): Promise<Array<{
 }
 
 /**
+ * Assign a database to a project using the DO API.
+ * Called after database is auto-provisioned to ensure it's in the correct project.
+ *
+ * @param databaseId - Database cluster ID (UUID format)
+ * @param projectId - Project ID to assign the database to
+ */
+export async function assignDatabaseToProject(databaseId: string, projectId: string): Promise<void> {
+  try {
+    const response = await fetch(
+      `${DO_CONFIG.API_BASE}/projects/${projectId}/resources`,
+      {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          resources: [`do:database:${databaseId}`]
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      // Don't fail deployment for project assignment issues
+      console.warn(`  Could not assign database to project: ${error}`);
+      return;
+    }
+
+    console.log(`  ✓ Database assigned to project`);
+  } catch (err) {
+    // Non-fatal - database still works even if not in project
+    console.warn(`  Could not assign database to project:`, err);
+  }
+}
+
+/**
  * Discovers an existing database by looking at Knowledge Bases, Agents, and DO Databases API.
  * Uses verbose logging to explain why discovery succeeded or failed.
  *
@@ -1027,12 +1061,17 @@ export async function uploadContentToKB(
  * Includes retry logic for "failed to get db creds" errors which occur when
  * the database is still initializing after provisioning.
  */
-export async function startIndexingJob(kbId: string): Promise<void> {
-  // Increased: DB provisioning can take 2-3 minutes for new databases
-  const maxRetries = 12;
-  const retryDelays = [5000, 10000, 15000, 20000, 25000, 30000, 30000, 30000, 30000, 30000, 30000, 30000]; // ~4 min total
+export async function startIndexingJob(
+  kbId: string,
+  maxWaitMs = 600000,     // 10 minutes (was ~4 minutes)
+  pollIntervalMs = 30000  // 30 seconds
+): Promise<void> {
+  const startTime = Date.now();
+  let attempts = 0;
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
+  while (Date.now() - startTime < maxWaitMs) {
+    attempts++;
+
     const response = await fetchWithRetry(
       `${DO_CONFIG.API_BASE}/gen-ai/indexing_jobs`,
       {
@@ -1047,8 +1086,9 @@ export async function startIndexingJob(kbId: string): Promise<void> {
 
     // 200 OK or empty response means success
     if (response.ok) {
-      if (attempt > 0) {
-        console.log(`✅ Indexing job started successfully after ${attempt + 1} attempts`);
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      if (attempts > 1) {
+        console.log(`  ✓ Indexing job started (${elapsed}s, ${attempts} attempts)`);
       }
       return;
     }
@@ -1057,28 +1097,31 @@ export async function startIndexingJob(kbId: string): Promise<void> {
 
     // Ignore "already running" error - that's success
     if (error.message?.includes('already has an indexing job running')) {
-      console.log('Indexing job already running (this is okay)');
+      console.log('  ✓ Indexing job already running');
       return;
     }
 
     // Retry on "failed to get db creds" - database not ready yet
     if (error.message?.includes('failed to get db creds')) {
-      if (attempt < maxRetries - 1) {
-        const delay = retryDelays[attempt];
-        console.log(`⏳ Database not ready yet (attempt ${attempt + 1}/${maxRetries}), waiting ${delay / 1000}s...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      const remaining = Math.round((maxWaitMs - (Date.now() - startTime)) / 1000);
+      console.log(`  ⏳ Database initializing (${elapsed}s elapsed, ~${remaining}s remaining)...`);
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+      continue;
     }
 
-    // For other errors or max retries exhausted, throw
+    // For other errors, throw immediately
     throw new Error(`Failed to start indexing: ${JSON.stringify(error)}`);
   }
+
+  // Timeout exceeded
+  throw new Error(`Database not ready after ${Math.round(maxWaitMs / 60000)} minutes - indexing could not start`);
 }
 
 /**
  * Wait for database to be provisioned by polling the KB's database_id field.
  * This is the "light ping" approach - no errors logged, just clean polling.
+ * After database is found, assigns it to the project (best-effort).
  *
  * @param kbId - Knowledge Base ID to check
  * @param maxWaitMs - Maximum wait time (default: 10 minutes)
@@ -1097,9 +1140,16 @@ export async function waitForDatabaseReady(
     // Check if database_id is present (database provisioned/associated)
     if (kb.knowledge_base.database_id) {
       const dbId = kb.knowledge_base.database_id;
-      console.log(`  ✓ Database ready: ${dbId}`);
+      console.log(`  ✓ Database ID found: ${dbId}`);
       // Cache the database ID for future use
       setCachedDatabaseId(dbId);
+
+      // Assign database to project (best-effort, non-blocking)
+      const projectId = await getProjectId();
+      if (projectId) {
+        await assignDatabaseToProject(dbId, projectId);
+      }
+
       return dbId;
     }
 
@@ -1204,28 +1254,25 @@ export async function isKBReady(kbId: string): Promise<{ ready: boolean; reason?
 
 /**
  * Attach a Knowledge Base to an Agent.
- * Simplified logging - assumes DB is already ready (use waitForDatabaseReady first).
+ * Uses long retry intervals since this may need to wait for database provisioning.
  *
  * @param agentId - Agent UUID
  * @param kbId - Knowledge Base UUID
- * @param maxRetries - Max retry attempts (default: 3 - reduced since DB should be ready)
- * @param initialDelayMs - Initial delay between retries (default: 5s)
+ * @param maxWaitMs - Maximum wait time (default: 10 minutes)
+ * @param pollIntervalMs - Interval between retries (default: 30 seconds)
  */
 export async function attachKnowledgeBaseToAgent(
   agentId: string,
   kbId: string,
-  maxRetries = 3,         // Reduced: DB should be ready before calling this
-  initialDelayMs = 5000
+  maxWaitMs = 600000,     // 10 minutes (was ~35 seconds)
+  pollIntervalMs = 30000  // 30 seconds
 ): Promise<void> {
+  const startTime = Date.now();
   let lastError: Error | null = null;
+  let attempts = 0;
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    // Add delay before retry attempts (not on first attempt)
-    if (attempt > 0) {
-      const delay = initialDelayMs * Math.pow(2, attempt - 1);
-      console.log(`  KB attachment pending (attempt ${attempt + 1}/${maxRetries})...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
+  while (Date.now() - startTime < maxWaitMs) {
+    attempts++;
 
     try {
       const response = await fetch(
@@ -1239,26 +1286,30 @@ export async function attachKnowledgeBaseToAgent(
       const responseText = await response.text();
 
       if (!response.ok) {
-        // Friendlier error - don't show raw JSON error to users
         const isDbNotReady = responseText.includes('failed to link');
         if (isDbNotReady) {
-          console.log(`  KB attachment waiting (database may still be initializing)...`);
-        } else {
-          console.log(`  KB attachment failed: ${response.status}`);
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          console.log(`  ⏳ KB attachment waiting (${elapsed}s elapsed)...`);
+          lastError = new Error(`Failed to attach KB to agent: ${responseText}`);
+          await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+          continue;
         }
-        lastError = new Error(`Failed to attach KB to agent: ${responseText}`);
-        continue; // Retry
+        // Non-DB error - throw immediately
+        throw new Error(`Failed to attach KB to agent: ${responseText}`);
       }
 
-      // Path-based endpoint returns knowledge_bases array in response - verify inline
+      // Verify attachment via response
       try {
         const responseData = JSON.parse(responseText);
         const attachedKBs = responseData.agent?.knowledge_bases || [];
-        const kbAttached = attachedKBs.some((kb: { uuid: string }) => kb.uuid === kbId);
-
-        if (kbAttached) {
-          console.log(`  ✓ KB attached successfully`);
-          return; // Success!
+        if (attachedKBs.some((kb: { uuid: string }) => kb.uuid === kbId)) {
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          if (attempts > 1) {
+            console.log(`  ✓ KB attached (${elapsed}s, ${attempts} attempts)`);
+          } else {
+            console.log(`  ✓ KB attached`);
+          }
+          return;
         }
       } catch {
         // If parsing fails, fall through to GET verification
@@ -1266,30 +1317,30 @@ export async function attachKnowledgeBaseToAgent(
 
       // Fallback: Verify attachment by fetching the agent
       const agentResponse = await getAgent(agentId);
-      const attachedKBIds = getKnowledgeBaseIds(agentResponse.agent);
-      const kbAttached = attachedKBIds.includes(kbId);
-
-      if (!kbAttached) {
-        console.log(`  KB attachment not yet confirmed (attempt ${attempt + 1}/${maxRetries})`);
-        lastError = new Error(`KB attachment failed - KB ${kbId} not attached after verification`);
-        continue; // Retry
+      if (getKnowledgeBaseIds(agentResponse.agent).includes(kbId)) {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        if (attempts > 1) {
+          console.log(`  ✓ KB attached (${elapsed}s, ${attempts} attempts)`);
+        } else {
+          console.log(`  ✓ KB attached`);
+        }
+        return;
       }
 
-      console.log(`  ✓ KB attached successfully`);
-      return; // Success!
+      lastError = new Error(`KB ${kbId} not attached after verification`);
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+
     } catch (err) {
-      if (err instanceof SyntaxError) {
-        console.log(`  KB attachment response parsing issue (attempt ${attempt + 1})`);
-        lastError = new Error('Failed to parse attach response');
-        continue; // Retry
+      if (err instanceof Error && err.message.includes('Failed to attach KB')) {
+        throw err; // Re-throw non-DB errors
       }
       lastError = err as Error;
-      continue; // Retry
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
     }
   }
 
-  // All retries exhausted
-  throw lastError || new Error('KB attachment failed after all retries');
+  // Timeout exceeded
+  throw lastError || new Error(`KB attachment timed out after ${Math.round(maxWaitMs / 60000)} minutes`);
 }
 
 // ============================================

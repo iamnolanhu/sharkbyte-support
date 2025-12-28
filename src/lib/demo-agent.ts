@@ -239,39 +239,40 @@ async function createDemoAgentIfNeeded(domain: string): Promise<DemoAgentResult>
     console.log(`Agent created: ${agent.uuid}`);
 
     // STEP 1: Create API key immediately (doesn't need DB)
-    console.log(`  Creating access key...`);
+    console.log(`  [Step 1/5] Creating access key...`);
     const { key: apiKey } = await getOrCreateAccessKey(agent.uuid);
     console.log(`  ✓ Access key created`);
 
     // STEP 2: Wait for database to be ready (light ping - no scary errors)
-    // This is the "proper" way to wait - checks KB's database_id field
+    // This checks KB's database_id field and assigns DB to project when found
     if (!kbWasExisting) {
-      console.log(`  Waiting for database to provision (up to 10 minutes)...`);
+      console.log(`  [Step 2/5] Waiting for database provisioning (up to 10 minutes)...`);
+      console.log(`    Note: This is normal for new deployments - database takes 5-10 minutes to provision`);
       try {
-        await waitForDatabaseReady(crawlKBId); // Uses new defaults: 10 min, 30s intervals
+        await waitForDatabaseReady(crawlKBId); // 10 min timeout, 30s intervals
       } catch {
-        console.log(`  Note: Database may still be provisioning (will continue anyway)`);
+        console.log(`    Database may still be provisioning (continuing anyway)`);
       }
     } else {
-      console.log(`  Database already provisioned (existing KB)`);
+      console.log(`  [Step 2/5] Database already provisioned (existing KB)`);
     }
 
     // STEP 3: Attach KB (should succeed now that DB is ready)
-    console.log(`  Attaching KB to agent...`);
+    console.log(`  [Step 3/5] Attaching KB to agent...`);
     try {
       await attachKnowledgeBaseToAgent(agent.uuid, crawlKBId);
     } catch (attachError) {
-      console.warn(`  KB attachment failed (auto-repair will handle):`,
+      console.warn(`  ⚠ KB attachment failed (auto-repair will handle):`,
         attachError instanceof Error ? attachError.message : attachError);
     }
 
-    // STEP 4: Start indexing
-    console.log(`  Starting indexing job...`);
+    // STEP 4: Start indexing (this is the TRUE database readiness check)
+    console.log(`  [Step 4/5] Starting indexing (waiting for database - up to 10 minutes)...`);
     await startIndexingJob(crawlKBId);
-    console.log(`  ✓ Indexing started`);
+    console.log(`  ✓ Indexing started - database is ready!`);
 
     // STEP 5: Wait for endpoint to be ready and set visibility to public
-    // This ensures the env summary shows the actual endpoint URL
+    console.log(`  [Step 5/5] Waiting for endpoint deployment...`);
     const endpoint = await setVisibilityAndGetEndpoint(agent.uuid);
 
     console.log(`Demo agent created successfully`);
