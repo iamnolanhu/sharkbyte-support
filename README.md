@@ -79,6 +79,8 @@ SharkByte instantly creates an AI chatbot that can answer questions about any we
 
 ```bash
 # Clone the repository
+
+![SharkByte Support](.github/hero.png)
 git clone https://github.com/iamnolanhu/sharkbyte-support.git
 cd sharkbyte-support
 
