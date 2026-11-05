@@ -28,11 +28,17 @@ export function initAnalytics(surface: AnalyticsSurface): boolean {
   const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
   if (!key) return false;
   if (initialized) return true;
+  // Replay and behavioural capture run on our own site only. Inside customer sites (the
+  // embed iframe) they are switched off explicitly, so PostHog remote settings can't turn them on.
+  const site = surface === 'site';
   posthog.init(key, {
     api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || DEFAULT_POSTHOG_HOST,
     capture_pageview: 'history_change',
-    autocapture: true,
-    disable_session_recording: false,
+    autocapture: site,
+    rageclick: site,
+    capture_dead_clicks: site,
+    capture_heatmaps: site,
+    disable_session_recording: !site,
   });
   posthog.register({ app: 'sharkbyte', surface });
   initialized = true;
