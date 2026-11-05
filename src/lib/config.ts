@@ -127,6 +127,12 @@ export interface LlmEnv {
 /** A free OpenRouter model that is instruction-tuned and over 20B parameters. */
 export const DEFAULT_OPENROUTER_MODEL = 'google/gemma-4-31b-it:free';
 
+/**
+ * NVIDIA Build chat model. NVIDIA retires hosted models (an HTTP 410 names the end-of-life
+ * date); pick a live id from its /v1/models list and set NVIDIA_LLM_MODEL.
+ */
+export const DEFAULT_NVIDIA_LLM_MODEL = 'nvidia/nemotron-3.5-lightning-30b-a3b';
+
 function envText(env: EnvVars, name: string): string | undefined {
   const value = env[name]?.trim();
   return value ? value : undefined;
@@ -141,7 +147,7 @@ export function getLlmEnv(env: EnvVars = process.env): LlmEnv {
     nvidiaKey: envText(env, 'NVIDIA_API_KEY'),
     cerebrasModel: envText(env, 'LLM_MODEL') ?? 'gpt-oss-120b',
     openrouterModel: envText(env, 'OPENROUTER_MODEL') ?? DEFAULT_OPENROUTER_MODEL,
-    nvidiaModel: envText(env, 'NVIDIA_LLM_MODEL') ?? 'openai/gpt-oss-120b',
+    nvidiaModel: envText(env, 'NVIDIA_LLM_MODEL') ?? DEFAULT_NVIDIA_LLM_MODEL,
   };
 }
 

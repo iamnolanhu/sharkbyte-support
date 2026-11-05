@@ -120,6 +120,19 @@ describe('createFallbackModel', () => {
     ]);
   });
 
+  it('falls back past a 402 (an account out of quota) and a 410 (a retired model)', async () => {
+    const { model, onFallback } = setup([
+      entry('cerebras', throwingModel(httpError(402))),
+      entry('openrouter', throwingModel(httpError(410))),
+      entry('nvidia', okModel('still swimming')),
+    ]);
+    expect(textOf(await streamParts(model))).toBe('still swimming');
+    expect(onFallback.mock.calls).toEqual([
+      ['cerebras', 'openrouter', 'error'],
+      ['openrouter', 'nvidia', 'error'],
+    ]);
+  });
+
   it('falls back on any other thrown error as error', async () => {
     const { model, onFallback } = setup([
       entry('cerebras', throwingModel(httpError(401))),

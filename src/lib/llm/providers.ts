@@ -37,12 +37,26 @@ const PROVIDERS: Record<ProviderName, ProviderSpec> = {
   },
 };
 
+/**
+ * Request fields that keep a reasoning model's thinking out of the way: answers get 600 output
+ * tokens and the first text must arrive within the first-byte timeout. Nemotron models think by
+ * default and can spend the whole budget doing it, so thinking is switched off; gpt-oss models
+ * reason at low effort.
+ */
+export function reasoningFields(modelId: string): Record<string, unknown> {
+  if (modelId.includes('nemotron')) return { chat_template_kwargs: { enable_thinking: false } };
+  if (modelId.includes('gpt-oss')) return { reasoning_effort: 'low' };
+  return {};
+}
+
 /** The providers in `env.providers` order, each an OpenAI-compatible chat model. */
 export function buildChain(env: LlmEnv, fetchImpl?: typeof fetch): ChainEntry[] {
   return env.providers.map((name) => {
     const spec = PROVIDERS[name];
     const apiKey = spec.apiKey(env);
     if (!apiKey) return { name, model: null };
+    const modelId = spec.modelId(env);
+    const extra = reasoningFields(modelId);
     const provider = createOpenAICompatible({
       name,
       baseURL: spec.baseURL,
@@ -50,7 +64,8 @@ export function buildChain(env: LlmEnv, fetchImpl?: typeof fetch): ChainEntry[] 
       headers: spec.headers,
       fetch: fetchImpl,
       includeUsage: true,
+      transformRequestBody: (args) => ({ ...args, ...extra }),
     });
-    return { name, model: provider.chatModel(spec.modelId(env)) };
+    return { name, model: provider.chatModel(modelId) };
   });
 }

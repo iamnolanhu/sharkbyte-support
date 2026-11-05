@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getLlmEnv } from '@/lib/config';
-import { buildChain, parseProviderList } from './providers';
+import { buildChain, parseProviderList, reasoningFields } from './providers';
 
 const SSE_BODY =
   'data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n' +
@@ -22,7 +22,7 @@ describe('getLlmEnv', () => {
     expect(env.providers).toEqual(['cerebras', 'openrouter', 'nvidia']);
     expect(env.firstByteTimeoutMs).toBe(8000);
     expect(env.cerebrasModel).toBe('gpt-oss-120b');
-    expect(env.nvidiaModel).toBe('openai/gpt-oss-120b');
+    expect(env.nvidiaModel).toBe('nvidia/nemotron-3.5-lightning-30b-a3b');
     expect(env.openrouterModel.endsWith(':free')).toBe(true);
     expect(env.cerebrasKey).toBeUndefined();
 
@@ -74,7 +74,48 @@ describe('buildChain', () => {
     expect(chain.map((e) => e.name)).toEqual(['cerebras', 'openrouter', 'nvidia']);
     expect(chain[0]?.model).toBeNull();
     expect(chain[1]?.model).toBeNull();
-    expect(chain[2]?.model?.modelId).toBe('openai/gpt-oss-120b');
+    expect(chain[2]?.model?.modelId).toBe('nvidia/nemotron-3.5-lightning-30b-a3b');
+  });
+
+  it('keeps reasoning models inside the answer budget', async () => {
+    const bodies: Record<string, Record<string, unknown>> = {};
+    const fetchImpl: typeof fetch = async (input, init) => {
+      bodies[String(input)] = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(SSE_BODY, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    const chain = buildChain(
+      getLlmEnv({ CEREBRAS_API_KEY: 'c', OPENROUTER_API_KEY: 'o', NVIDIA_API_KEY: 'n' }),
+      fetchImpl,
+    );
+    for (const entry of chain) {
+      const result = await entry.model?.doStream({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        maxOutputTokens: 600,
+      });
+      await result?.stream.cancel();
+    }
+
+    const cerebras = bodies['https://api.cerebras.ai/v1/chat/completions'];
+    const openrouter = bodies['https://openrouter.ai/api/v1/chat/completions'];
+    const nvidia = bodies['https://integrate.api.nvidia.com/v1/chat/completions'];
+    // gpt-oss: low reasoning effort; nemotron: thinking off (otherwise it spends all 600 tokens thinking).
+    expect(cerebras).toMatchObject({ model: 'gpt-oss-120b', reasoning_effort: 'low', max_tokens: 600 });
+    expect(nvidia).toMatchObject({
+      model: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+      chat_template_kwargs: { enable_thinking: false },
+      max_tokens: 600,
+    });
+    expect(nvidia).not.toHaveProperty('reasoning_effort');
+    expect(openrouter).not.toHaveProperty('reasoning_effort');
+    expect(openrouter).not.toHaveProperty('chat_template_kwargs');
+  });
+
+  it('reasoningFields follows the model family, not the provider', () => {
+    expect(reasoningFields('openai/gpt-oss-20b')).toEqual({ reasoning_effort: 'low' });
+    expect(reasoningFields('nvidia/nemotron-3-super-120b-a12b')).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    expect(reasoningFields('google/gemma-4-31b-it:free')).toEqual({});
   });
 
   it('uses each provider base URL and model', async () => {
@@ -90,7 +131,7 @@ describe('buildChain', () => {
     expect(chain.map((e) => e.model?.modelId)).toEqual([
       'gpt-oss-120b',
       getLlmEnv({}).openrouterModel,
-      'openai/gpt-oss-120b',
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
     ]);
     for (const entry of chain) {
       const result = await entry.model?.doStream({
