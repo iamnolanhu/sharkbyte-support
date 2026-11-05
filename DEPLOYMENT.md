@@ -44,8 +44,9 @@ PostHog project key is the only public one.
 | `LLM_PROVIDERS` | no | `cerebras,openrouter,nvidia` | Provider order; providers without a key are skipped |
 | `LLM_FIRST_BYTE_TIMEOUT_MS` | no | `8000` | Wait for a provider's first token before falling back |
 | `LLM_MODEL` | no | `gpt-oss-120b` | Cerebras model id |
-| `NVIDIA_LLM_MODEL` | no | `openai/gpt-oss-120b` | NVIDIA chat model id |
+| `NVIDIA_LLM_MODEL` | no | `nvidia/nemotron-3.5-lightning-30b-a3b` | NVIDIA chat model id |
 | `EMBEDDING_MODEL` | no | `nvidia/nemotron-3.5-embed-1b` | NVIDIA embedding model (1024 dimensions); changing it means re-crawling every agent |
+| `EMBEDDING_BATCH_SIZE` | no | `1` | Inputs per embeddings request (up to 32); a batch that gets a 5xx is split down to single inputs |
 | `FIRECRAWL_API_KEY` | no | | Firecrawl for JavaScript-rendered pages |
 | `APP_DOMAIN` | no | Vercel production URL | Public domain used in copy and the demo agent |
 | `CRON_SECRET` | no | | Bearer secret for `/api/cron/sweep`; without it the sweep refuses every call |
@@ -57,10 +58,24 @@ PostHog project key is the only public one.
 | `MAX_FIRECRAWL_PER_DAY` | no | `50` | Firecrawl scrapes per UTC day, app-wide |
 | `POSTHOG_API_KEY` | no | | Server-side PostHog events |
 | `POSTHOG_HOST` | no | posthog-node default | Server-side PostHog host |
-| `NEXT_PUBLIC_POSTHOG_KEY` | no | | Browser PostHog (pageviews, autocapture, session replay) |
+| `NEXT_PUBLIC_POSTHOG_KEY` | no | | Browser PostHog: pageviews, autocapture and session replay on the site; named events only inside the embed widget |
 | `NEXT_PUBLIC_POSTHOG_HOST` | no | `https://us.i.posthog.com` | Browser PostHog host |
 
 At least one LLM key must be set; `NVIDIA_API_KEY` counts, since it is required anyway.
+
+**Model ids go stale.** NVIDIA and Cerebras retire hosted models. An HTTP 410 in the logs ("has
+reached its end of life") means the id is gone, and a 404 "Function not found for account" means
+it isn't served to your key. Pick a live id from the provider's `/v1/models` list and set
+`NVIDIA_LLM_MODEL` or `LLM_MODEL`; no code change is needed.
+
+**Reasoning models.** Answers get 600 output tokens, and the first text must arrive within
+`LLM_FIRST_BYTE_TIMEOUT_MS`. The chain therefore sends gpt-oss models `reasoning_effort: "low"`
+and Nemotron models `chat_template_kwargs: { enable_thinking: false }`; with thinking on, a
+Nemotron model can spend the whole budget thinking and send no answer.
+
+**Embedding batches.** NVIDIA's hosted embedder fails most requests that carry more than one
+input (HTTP 500) while single inputs succeed, so `EMBEDDING_BATCH_SIZE` defaults to 1. Raise it
+once batches work again; a batch that still fails is split in halves down to single inputs.
 
 **OpenRouter and Zero Data Retention:** OpenRouter's free models refuse accounts that enforce
 Zero Data Retention. Either allow non-ZDR providers for the key you use here, or drop
@@ -133,13 +148,15 @@ if your database has room.
 
 A crawl stops at the function time limit. The daily sweep marks an abandoned crawl as failed;
 the owner (the browser that created the agent) can then press **Repair** on the agent's page
-to crawl the site again.
+to crawl the site again. Anyone can also retry a failed agent by submitting its URL again; that
+crawl counts against the same hourly and daily caps.
 
 ### Chat answers "Sammy's fins are tangled — every free model is busy"
 
 Every LLM provider in the chain failed or timed out (or embeddings did). Check that at least one LLM key is valid,
 that the OpenRouter key allows non-ZDR providers (see above), and the function logs for the
-provider error.
+provider error. An HTTP 410 or 404 means a retired or unavailable model id (see "Model ids go
+stale"); a 402 means that provider account has no quota left.
 
 ### Old embed snippets
 
