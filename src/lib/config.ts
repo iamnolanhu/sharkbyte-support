@@ -171,5 +171,12 @@ export const EMBEDDING_CONFIG = {
   },
   // Must match the halfvec(1024) column in the chunks table
   dimensions: 1024,
-  batchSize: 32,
+  /**
+   * Inputs per request. Default 1: NVIDIA's hosted embedder fails most multi-input requests
+   * with HTTP 500 while single inputs succeed. Raise it (up to 32) once batches work again;
+   * a batch that gets a 5xx is split down to single inputs either way.
+   */
+  get batchSize() {
+    return Math.min(envInt(process.env, 'EMBEDDING_BATCH_SIZE', 1), 32);
+  },
 } as const;
