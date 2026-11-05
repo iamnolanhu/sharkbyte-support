@@ -1,7 +1,9 @@
-import type { Limits } from '@/lib/config';
+import { apiError, COPY, rateLimited } from '@/lib/agent-api';
+import { APP_DOMAIN, type Limits } from '@/lib/config';
 import type { Db } from '@/lib/db/client';
-import { finishCrawl, resetForCrawl } from '@/lib/db/agents';
-import { STALE_CRAWL_ERROR } from '@/lib/sweep';
+import { finishCrawl, getAgentById, resetForCrawl } from '@/lib/db/agents';
+import { checkRail } from '@/lib/rails';
+import { ensureCapacity, STALE_CRAWL_ERROR } from '@/lib/sweep';
 import { acquireLock, releaseLock } from '@/lib/db/quota';
 import { runInBackground } from '@/lib/background';
 import type { AgentRow } from '@/types';
@@ -46,6 +48,51 @@ export async function startCrawlOrRelease(db: Db, agentId: string, now: Date): P
     await releaseCrawlLock(db, agentId);
     throw err;
   }
+}
+
+/** What `recrawlWithRails` did: started a crawl, found one already holding the lock, or the response that refused it. */
+export type RecrawlResult = 'started' | 'busy' | Response;
+
+/**
+ * A fresh crawl of an existing agent under the same rails as a new one (owner repair, and a
+ * failed agent re-submitted by anyone): the per-agent crawl lock, then the hourly create cap,
+ * capacity and the daily crawl cap. A refusal or a throw releases the lock.
+ */
+export async function recrawlWithRails(
+  db: Db,
+  agentId: string,
+  ip: string,
+  now: Date,
+  limits: Limits,
+): Promise<RecrawlResult> {
+  // One crawler per agent: a second request while one runs spends nothing.
+  if (!(await tryLockCrawl(db, agentId, now, limits))) return 'busy';
+  let refused: Response | null;
+  try {
+    refused = await railRefusal(db, agentId, ip, now, limits);
+  } catch (err) {
+    await releaseCrawlLock(db, agentId);
+    throw err;
+  }
+  if (refused) {
+    await releaseCrawlLock(db, agentId);
+    return refused;
+  }
+  await startCrawlOrRelease(db, agentId, now);
+  return 'started';
+}
+
+/** The response that stops a re-crawl (a rail, or the agent is gone), or null to go ahead. */
+async function railRefusal(db: Db, agentId: string, ip: string, now: Date, limits: Limits): Promise<Response | null> {
+  const createRail = await checkRail(db, 'create_ip', { ip }, now, limits);
+  if (!createRail.ok) return rateLimited(createRail);
+  const capacity = await ensureCapacity(db, now, limits);
+  if (!capacity.ok) return rateLimited(capacity);
+  // The capacity sweep may have evicted this very agent.
+  if (!(await getAgentById(db, agentId))) return apiError(404, COPY.retired(APP_DOMAIN));
+  const crawlRail = await checkRail(db, 'crawl_daily', { ip: 'global' }, now, limits);
+  if (!crawlRail.ok) return rateLimited(crawlRail);
+  return null;
 }
 
 /** Resets the agent and crawls in the background. The caller must already hold the crawl lock. */

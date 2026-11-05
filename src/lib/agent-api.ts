@@ -65,6 +65,7 @@ export const COPY = {
   notReady: "Sammy is still exploring this site — try again once it's ready.",
   crawlFailed: "This Sammy couldn't read the site. Try Repair, or make one for another page.",
   busy: 'Sammy is already diving into that site — try again in a moment.',
+  crawlStartFailed: 'The tide pulled Sammy back — try again in a moment.',
   providersDown: PROVIDERS_DOWN_COPY,
   tooLong: 'That message is a whale — keep it under 2,000 characters.',
 } as const;

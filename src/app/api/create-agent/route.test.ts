@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getLimits } from '@/lib/config';
 import { setDbForTests, type Db } from '@/lib/db/client';
-import { getAgentByDomain, insertAgent } from '@/lib/db/agents';
+import { finishCrawl, getAgentByDomain, getAgentById, insertAgent } from '@/lib/db/agents';
 import { insertChunksWithinCeiling } from '@/lib/db/chunks';
-import { acquireLock, readQuota } from '@/lib/db/quota';
+import { acquireLock, readQuota, releaseLock } from '@/lib/db/quota';
 import { runInBackground } from '@/lib/background';
 import { runCrawl } from '@/lib/crawl/run-crawl';
 import { tryLockCrawl } from '@/lib/crawl/start-crawl';
@@ -12,9 +12,15 @@ import { COPY } from '@/lib/agent-api';
 import { hashOwnerToken } from '@/lib/owner-token';
 import { railKey } from '@/lib/rails';
 import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
+import type { AgentRow } from '@/types';
 import { POST, maxDuration } from './route';
 
 vi.mock('@/lib/background', () => ({ runInBackground: vi.fn() }));
+// The real lock, wrapped so one test can make it throw.
+vi.mock('@/lib/crawl/start-crawl', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/crawl/start-crawl')>();
+  return { ...actual, tryLockCrawl: vi.fn(actual.tryLockCrawl) };
+});
 vi.mock('@/lib/crawl/run-crawl', () => ({ runCrawl: vi.fn(), createCrawlDeps: vi.fn() }));
 vi.mock('@/lib/analytics/server');
 // Every host resolves to a public address except one, so tests never touch real DNS.
@@ -228,15 +234,134 @@ describe('POST /api/create-agent', () => {
     expect(await crawlsToday()).toBe(0);
   });
 
-  it('a failed crawl start releases both locks', async () => {
+  it('a failed crawl start removes the new row, frees both locks and is 503', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     background.mockImplementationOnce(() => {
       throw new Error('scheduler down');
     });
-    await expect(post({ url: 'example.com' })).rejects.toThrow('scheduler down');
-    const row = await getAgentByDomain(db, 'example.com');
-    if (!row) throw new Error('row missing');
-    expect(await tryLockCrawl(db, row.id, NOW, getLimits())).toBe(true);
+    const { status, body } = await create('example.com');
+    expect(status).toBe(503);
+    expect(body).toEqual({ success: false, error: COPY.crawlStartFailed });
+    // No orphan: the row is gone, so nobody is stuck on an unowned `crawling` agent.
+    expect(await getAgentByDomain(db, 'example.com')).toBeNull();
     expect(await acquireLock(db, 'create:example.com', NOW, 1000)).toBe(true);
+    await releaseLock(db, 'create:example.com');
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('scheduler down');
+    errorSpy.mockRestore();
+
+    // An immediate retry makes a fresh agent with an owner token.
+    const retry = await create('example.com');
+    expect(retry.status).toBe(200);
+    expect(retry.body.isExisting).toBe(false);
+    expect(retry.body.ownerToken).toBeTruthy();
+    const row = await getAgentByDomain(db, 'example.com');
+    expect(row?.id).toBe(retry.body.agentId);
+  });
+
+  it('a crawl lock that cannot be taken after insert also leaves no row', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(tryLockCrawl).mockRejectedValueOnce(new Error('neon blip'));
+    const { status } = await create('example.com');
+    errorSpy.mockRestore();
+    expect(status).toBe(503);
+    expect(await getAgentByDomain(db, 'example.com')).toBeNull();
+    expect(background).not.toHaveBeenCalled();
+  });
+
+  describe('re-submitting a failed Sammy', () => {
+    async function failedAgent(domain: string, opts: { pinned?: boolean } = {}): Promise<AgentRow> {
+      const row = await insertAgent(db, {
+        domain,
+        url: `https://${domain}/`,
+        name: `Sammy - ${domain}`,
+        instruction: 'x',
+        ownerTokenHash: opts.pinned ? null : hashOwnerToken('first-owner-token'),
+        pinned: opts.pinned ?? false,
+        now: NOW,
+      });
+      if (!row) throw new Error('insert failed');
+      await finishCrawl(db, row.id, { status: 'failed', lastError: 'riptide' });
+      return row;
+    }
+
+    it('re-crawls it for a second visitor without minting or changing an owner token', async () => {
+      const agent = await failedAgent('broken.example');
+      const visitor = '198.51.100.42';
+
+      const { status, body } = await create('https://broken.example', visitor);
+
+      expect(status).toBe(200);
+      expect(body).toMatchObject({ success: true, agentId: agent.id, status: 'crawling', isExisting: true });
+      expect(body).not.toHaveProperty('ownerToken');
+      const row = await getAgentById(db, agent.id);
+      expect(row?.status).toBe('crawling');
+      expect(row?.ownerTokenHash).toBe(hashOwnerToken('first-owner-token'));
+      expect(background).toHaveBeenCalledTimes(1);
+      expect(await createsThisHour(visitor)).toBe(1);
+      expect(await crawlsToday()).toBe(1);
+      // The crawl lock is held for the background crawl.
+      expect(await tryLockCrawl(db, agent.id, NOW, getLimits())).toBe(false);
+    });
+
+    it('re-crawls a crawl that went stale', async () => {
+      const row = await insertAgent(db, {
+        domain: 'stale.example',
+        url: 'https://stale.example/',
+        name: 'Sammy - stale.example',
+        instruction: 'x',
+        ownerTokenHash: null,
+        pinned: false,
+        now: new Date(NOW.getTime() - 60 * 60 * 1000),
+      });
+      if (!row) throw new Error('insert failed');
+
+      const { status, body } = await create('stale.example', '198.51.100.43');
+
+      expect(status).toBe(200);
+      expect(body).toMatchObject({ status: 'crawling', isExisting: true });
+      expect(background).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns a pinned failed agent unchanged', async () => {
+      const agent = await failedAgent('pinned.example', { pinned: true });
+
+      const { status, body } = await create('pinned.example', '198.51.100.44');
+
+      expect(status).toBe(200);
+      expect(body).toMatchObject({ agentId: agent.id, status: 'failed', isExisting: true });
+      expect(background).not.toHaveBeenCalled();
+      expect(await createsThisHour('198.51.100.44')).toBe(0);
+      expect((await getAgentById(db, agent.id))?.status).toBe('failed');
+    });
+
+    it('starts nothing while its crawl lock is held', async () => {
+      const agent = await failedAgent('locked.example');
+      expect(await tryLockCrawl(db, agent.id, NOW, getLimits())).toBe(true);
+
+      const { status, body } = await create('locked.example', '198.51.100.45');
+
+      expect(status).toBe(200);
+      expect(body).toMatchObject({ agentId: agent.id, status: 'failed', isExisting: true });
+      expect(background).not.toHaveBeenCalled();
+      expect(await createsThisHour('198.51.100.45')).toBe(0);
+      expect(await crawlsToday()).toBe(0);
+    });
+
+    it('counts against the hourly create cap and frees the lock when refused', async () => {
+      const agent = await failedAgent('capped.example');
+      for (const d of ['one.example', 'two.example', 'three.example']) {
+        expect((await create(d)).status).toBe(200);
+      }
+      background.mockReset();
+
+      const { status, body } = await create('capped.example');
+
+      expect(status).toBe(429);
+      expect(body.rail).toBe('create_ip');
+      expect(background).not.toHaveBeenCalled();
+      expect((await getAgentById(db, agent.id))?.status).toBe('failed');
+      expect(await tryLockCrawl(db, agent.id, NOW, getLimits())).toBe(true);
+    });
   });
 
   it('maxDuration matches the crawl budget', () => {
