@@ -18,7 +18,7 @@ import {
   estimateSiteSize,
 } from '@/lib/digitalocean';
 import { CRAWLER_CONFIG } from '@/lib/config';
-import type { CreateAgentRequest, CreateAgentApiResponse } from '@/types';
+import type { CreateAgentRequest, LegacyCreateAgentApiResponse } from '@/types';
 
 // In-memory lock to prevent duplicate concurrent agent creations for the same domain
 // Key: domain, Value: Promise that resolves to the response
@@ -121,7 +121,7 @@ async function createAgentInternal(normalizedUrl: string, domain: string): Promi
       const { key: accessKey } = await getOrCreateAccessKey(agent.uuid);
 
       const kbIds = getKnowledgeBaseIds(agent);
-      const response: CreateAgentApiResponse = {
+      const response: LegacyCreateAgentApiResponse = {
         success: true,
         agentId: agent.uuid,
         agentName: agent.name,
@@ -252,7 +252,7 @@ async function createAgentInternal(normalizedUrl: string, domain: string): Promi
     }
 
     // Return with KB ID
-    const response: CreateAgentApiResponse = {
+    const response: LegacyCreateAgentApiResponse = {
       success: true,
       agentId: agent.uuid,
       agentName: agent.name,

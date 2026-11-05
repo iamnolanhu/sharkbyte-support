@@ -2,6 +2,8 @@
  * SharkByte Support - Type Definitions
  */
 
+import type { RailName } from '@/lib/rails';
+
 // ============================================
 // Knowledge Base Types
 // ============================================
@@ -100,7 +102,7 @@ export interface CreateAgentResponse {
   agent: Agent;
 }
 
-export interface GetAgentResponse {
+export interface DOGetAgentResponse {
   agent: Agent;
 }
 
@@ -213,7 +215,7 @@ export interface CreateAgentRequest {
   maxPages?: number;
 }
 
-export interface CreateAgentApiResponse {
+export interface LegacyCreateAgentApiResponse {
   success: boolean;
   agentId: string;
   agentName: string;
@@ -227,7 +229,7 @@ export interface CreateAgentApiResponse {
   error?: string;
 }
 
-export interface AgentStatusResponse {
+export interface LegacyAgentStatusResponse {
   status: 'creating' | 'indexing' | 'deploying' | 'ready' | 'error';
   kbStatus?: string;
   agentStatus?: string;
@@ -298,4 +300,56 @@ export interface RetrievedChunk {
   title: string;
   content: string;
   score: number;
+}
+
+// ============================================
+// API response shapes
+// ============================================
+
+export interface PublicAgent {
+  id: string;
+  name: string;
+  domain: string;
+  url: string;
+  status: AgentStatus;
+  pagesCrawled: number;
+  pagesTotal: number;
+  chunkCount: number;
+  createdAt: string;
+  lastUsedAt: string;
+  pinned: boolean;
+  instruction: string;
+  lastError: string | null;
+}
+
+export interface CreateAgentApiResponse {
+  success: true;
+  agentId: string;
+  agentName: string;
+  url: string;
+  status: AgentStatus;
+  isExisting: boolean;
+  ownerToken?: string;
+}
+
+export interface AgentStatusResponse {
+  success: true;
+  status: AgentStatus;
+  pagesCrawled: number;
+  pagesTotal: number;
+  chunkCount: number;
+  message: string;
+  error?: string;
+}
+
+export interface GetAgentResponse {
+  success: true;
+  agent: PublicAgent;
+  isOwner: boolean;
+}
+
+export interface ApiErrorBody {
+  success: false;
+  error: string;
+  rail?: RailName;
 }

@@ -9,7 +9,7 @@ import type {
   ListKBResponse,
   KnowledgeBase,
   CreateAgentResponse,
-  GetAgentResponse,
+  DOGetAgentResponse,
   CreateAccessKeyResponse,
   ListAccessKeysResponse,
 } from '@/types';
@@ -1650,7 +1650,7 @@ export async function createAgent(
 }
 
 // List all agents in the project
-export async function listAgents(): Promise<GetAgentResponse['agent'][]> {
+export async function listAgents(): Promise<DOGetAgentResponse['agent'][]> {
   const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/agents`, {
     headers: getHeaders(),
   });
@@ -1667,7 +1667,7 @@ export async function listAgents(): Promise<GetAgentResponse['agent'][]> {
 // Find an existing agent by domain (using .includes() for flexible matching)
 export async function findAgentByDomain(
   domain: string
-): Promise<GetAgentResponse['agent'] | null> {
+): Promise<DOGetAgentResponse['agent'] | null> {
   const agents = await listAgents();
   // Look for agent with name that includes the domain (case-insensitive)
   // This is more flexible than exact matching and handles edge cases
@@ -1684,7 +1684,7 @@ export async function findAgentByDomain(
   return found;
 }
 
-export async function getAgent(agentId: string): Promise<GetAgentResponse> {
+export async function getAgent(agentId: string): Promise<DOGetAgentResponse> {
   const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}`, {
     headers: getHeaders(),
   });
@@ -1718,7 +1718,7 @@ export async function deleteAgent(agentId: string): Promise<void> {
 export async function updateAgent(
   agentId: string,
   updates: { instruction?: string; name?: string; description?: string }
-): Promise<GetAgentResponse> {
+): Promise<DOGetAgentResponse> {
   const response = await fetch(`${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}`, {
     method: 'PUT',
     headers: getHeaders(),
@@ -1738,7 +1738,7 @@ export async function updateAgent(
 export async function updateAgentVisibility(
   agentId: string,
   visibility: 'VISIBILITY_PUBLIC' | 'VISIBILITY_PRIVATE'
-): Promise<GetAgentResponse> {
+): Promise<DOGetAgentResponse> {
   const response = await fetch(
     `${DO_CONFIG.API_BASE}/gen-ai/agents/${agentId}/deployment_visibility`,
     {

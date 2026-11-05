@@ -11,7 +11,7 @@ import {
 } from '@/lib/digitalocean';
 import { scrapeUrl } from '@/lib/firecrawl';
 import { FIRECRAWL_CONFIG } from '@/lib/config';
-import type { AgentStatusResponse } from '@/types';
+import type { LegacyAgentStatusResponse } from '@/types';
 
 // Track ongoing Firecrawl operations to avoid duplicates
 const firecrawlInProgress = new Set<string>();
@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
 
     // Use isKBReady to determine overall status
     const readiness = await isKBReady(kbId);
-    let status: AgentStatusResponse['status'];
+    let status: LegacyAgentStatusResponse['status'];
     let message: string | undefined;
 
     if (readiness.ready) {
@@ -187,7 +187,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const response: AgentStatusResponse = {
+    const response: LegacyAgentStatusResponse = {
       status,
       kbStatus: kb.status,
       agentStatus,
