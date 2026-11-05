@@ -12,6 +12,7 @@ import { buildChain } from '@/lib/llm/providers';
 import {
   chatEventProperties,
   hashVisitor,
+  sanitizeHostDomain,
   type ChatEventInput,
   type ChatRequestMeta,
 } from '@/lib/chat/chat-event';
@@ -87,7 +88,18 @@ export interface HandleChatInput {
   meta?: ChatRequestMeta;
 }
 
-const SITE_META: ChatRequestMeta = { surface: 'site', userAgent: null, origin: null, referer: null };
+const SITE_META: ChatRequestMeta = { surface: 'site', userAgent: null, origin: null, referer: null, host: null };
+
+/** The embedding page's host the widget reports in its body; only the widget route trusts it. */
+function readHostDomain(raw: string, meta: ChatRequestMeta): string | null {
+  if (meta.surface !== 'embed') return null;
+  try {
+    const body: unknown = JSON.parse(raw);
+    return isRecord(body) ? sanitizeHostDomain(body.hostDomain) : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Answers one chat message for an agent as an AI SDK UI message stream. */
 export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_META }: HandleChatInput): Promise<Response> {
@@ -107,6 +119,7 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
   const { turns } = parsed;
   const question = (turns.at(-1) as ChatTurn).content;
   const visitorId = hashVisitor(ip, meta.userAgent);
+  const hostDomain = readHostDomain(raw, meta);
   const reportTurn = (fields: Partial<ChatEventInput> & Pick<ChatEventInput, 'outcome'>) =>
     captureServer(
       'chat_completed',
@@ -114,6 +127,7 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
         agentId: agent.id,
         domain: agent.domain,
         meta,
+        hostDomain,
         question,
         answer: null,
         provider: null,

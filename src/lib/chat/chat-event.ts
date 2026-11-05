@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { APP_DOMAIN } from '@/lib/config';
 
 export type ChatSurface = 'site' | 'embed';
 export type ChatOutcome = 'ok' | 'provider_error' | 'rate_limited';
@@ -9,6 +10,8 @@ export interface ChatRequestMeta {
   userAgent: string | null;
   origin: string | null;
   referer: string | null;
+  /** The Host header the request arrived on: our own host, never the embedding page's. */
+  host: string | null;
 }
 
 export const QUESTION_CAP = 2000;
@@ -22,6 +25,7 @@ export function chatRequestMeta(headers: Headers, surface: ChatSurface): ChatReq
     userAgent: headers.get('user-agent'),
     origin: headers.get('origin'),
     referer: headers.get('referer'),
+    host: headers.get('host'),
   };
 }
 
@@ -39,10 +43,37 @@ function hostnameOf(value: string | null): string | null {
   }
 }
 
-/** The hostname of the page embedding the widget, from Origin, else Referer; null on the site. */
-export function embedHost(meta: ChatRequestMeta): string | null {
+const MAX_HOST_CHARS = 253;
+
+/** A bare http(s) hostname from the widget's `hostDomain` body field, or null when it is anything else. */
+export function sanitizeHostDomain(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_HOST_CHARS) return null;
+  if (/[/?#@\s]/.test(value)) return null;
+  try {
+    const url = new URL(`https://${value}`);
+    return url.hostname && !url.port ? url.hostname : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The hostname of the page embedding the widget. The widget's own request comes from our iframe,
+ * so its `hostDomain` body field is preferred; Origin, then Referer, count only when they are not
+ * our own host. Null on the site route.
+ */
+export function embedHost(meta: ChatRequestMeta, hostDomain: string | null, appDomain: string): string | null {
   if (meta.surface !== 'embed') return null;
-  return hostnameOf(meta.origin) ?? hostnameOf(meta.referer);
+  if (hostDomain) return hostDomain;
+  const own = new Set(
+    [hostnameOf(`https://${appDomain}`), hostnameOf(`https://${meta.host ?? ''}`)].filter(
+      (h): h is string => h !== null,
+    ),
+  );
+  for (const candidate of [hostnameOf(meta.origin), hostnameOf(meta.referer)]) {
+    if (candidate && !own.has(candidate)) return candidate;
+  }
+  return null;
 }
 
 export function clip(text: string, max: number): string {
@@ -53,6 +84,8 @@ export interface ChatEventInput {
   agentId: string;
   domain: string;
   meta: ChatRequestMeta;
+  /** The sanitized `hostDomain` the widget sent, if any. */
+  hostDomain: string | null;
   question: string;
   answer: string | null;
   provider: string | null;
@@ -81,6 +114,6 @@ export function chatEventProperties(input: ChatEventInput): Record<string, strin
     retrievedChunks: input.retrievedChunks,
     fallbackCount: input.fallbackCount,
     outcome: input.outcome,
-    host_domain: embedHost(input.meta),
+    host_domain: embedHost(input.meta, input.hostDomain, APP_DOMAIN),
   };
 }

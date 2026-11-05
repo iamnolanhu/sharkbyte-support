@@ -85,8 +85,8 @@ PostHog is off when its keys are unset; nothing else depends on it.
 
 **Privacy:** when `POSTHOG_API_KEY` is set, every chat question and answer is logged to PostHog
 server-side (the `chat_completed` event: question up to 2,000 characters, answer up to 4,000, the
-provider and model that answered, token counts, latency and outcome). Visitors appear only as a
-salted hash of their IP address and browser; the raw IP is never sent. Embedded chats also record
+provider and model that answered, token counts, latency and outcome). Visitors appear only as a hashed id of
+their IP address and browser; the raw IP is never sent. Embedded chats also record
 the hostname of the page hosting the widget. Tell your visitors accordingly, or leave
 `POSTHOG_API_KEY` unset to log nothing.
 

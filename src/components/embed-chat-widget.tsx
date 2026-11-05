@@ -32,6 +32,12 @@ function referrerHost(): string {
   }
 }
 
+/** The embedding page's hostname for the chat request, or undefined when the referrer is hidden. */
+function parentHost(): string | undefined {
+  const host = referrerHost();
+  return host === 'unknown' ? undefined : host;
+}
+
 interface EmbedChatWidgetProps {
   agentId: string;
   agentName?: string;
@@ -73,6 +79,7 @@ export function EmbedChatWidget({
     apiUrl: `/api/widget/${agentId}`,
     agentId,
     surface: 'embed',
+    getHostDomain: parentHost,
   });
 
   // Use same theme for both light/dark slots to bypass prefers-color-scheme issues

@@ -48,6 +48,26 @@ describe('captureServer', () => {
     expect(captureImmediate.mock.calls[0]?.[0]).toMatchObject({ distinctId: 'sharkbyte-server' });
   });
 
+  it('gives up after its budget when PostHog never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubEnv('POSTHOG_API_KEY', 'phc_test');
+      captureImmediate.mockReturnValue(new Promise<void>(() => undefined));
+      let done = false;
+      const sent = captureServer('chat_completed', {}).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(1900);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await sent;
+      expect(done).toBe(true);
+      expect(constructed.mock.calls[0]?.[1]).toMatchObject({ requestTimeout: 2000, fetchRetryCount: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('never throws when PostHog fails', async () => {
     vi.stubEnv('POSTHOG_API_KEY', 'phc_test');
     captureImmediate.mockRejectedValue(new Error('network down'));

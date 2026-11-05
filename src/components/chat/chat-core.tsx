@@ -16,6 +16,8 @@ export interface UseChatOptions {
   apiUrl: string;
   agentId: string;
   surface: 'site' | 'embed';
+  /** The embedding page's hostname, read per request; sent as `hostDomain` for analytics. */
+  getHostDomain?: () => string | undefined;
   onError?: (error: Error) => void;
 }
 
@@ -105,7 +107,7 @@ export function toChatMessages(messages: UIMessage[]): ChatMessage[] {
  * Shared chat logic: the AI SDK chat over the UI message stream, plus the input box,
  * local error bubbles and scroll-to-bottom behaviour both widgets and the chat page use.
  */
-export function useChat({ apiUrl, agentId, surface, onError }: UseChatOptions): UseChatReturn {
+export function useChat({ apiUrl, agentId, surface, getHostDomain, onError }: UseChatOptions): UseChatReturn {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -116,9 +118,12 @@ export function useChat({ apiUrl, agentId, surface, onError }: UseChatOptions): 
     () =>
       new DefaultChatTransport<UIMessage>({
         api: apiUrl,
-        prepareSendMessagesRequest: ({ messages }) => ({ body: buildChatRequestBody(agentId, messages) }),
+        prepareSendMessagesRequest: ({ messages }) => {
+          const hostDomain = getHostDomain?.();
+          return { body: { ...buildChatRequestBody(agentId, messages), ...(hostDomain ? { hostDomain } : {}) } };
+        },
       }),
-    [apiUrl, agentId],
+    [apiUrl, agentId, getHostDomain],
   );
 
   // The SDK reads the latest transport and callbacks on every request; a new id (another

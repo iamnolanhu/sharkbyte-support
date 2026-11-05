@@ -361,7 +361,7 @@ function completedDistinctIds(): unknown[] {
 }
 
 describe('chat_completed analytics', () => {
-  const SITE_META = { surface: 'site' as const, userAgent: 'TestAgent/1.0', origin: null, referer: null };
+  const SITE_META = { surface: 'site' as const, userAgent: 'TestAgent/1.0', origin: null, referer: null, host: null };
 
   it('a successful turn captures chat_completed once with a hashed visitor id', async () => {
     const agent = await makeAgent('reef.example');
@@ -473,6 +473,52 @@ describe('chat_completed analytics', () => {
     );
     await res.text();
     expect(completedEvents()[0]).toMatchObject({ chat_surface: 'embed', host_domain: 'shop.customer.example' });
+  });
+
+  it('the widget request from our own iframe reports the parent host from the body', async () => {
+    const agent = await makeAgent('reef.example');
+    useModel(answerParts('Widget fins'));
+    const res = await widgetPost(
+      new Request('https://app.sharkbyte.test/api/widget/x', {
+        method: 'POST',
+        headers: { origin: `https://${APP_DOMAIN}`, referer: 'https://app.sharkbyte.test/embed/x', host: 'app.sharkbyte.test' },
+        body: JSON.stringify({ messages: [userMessage('hi')], hostDomain: 'parent.customer.example' }),
+      }),
+      { params: Promise.resolve({ agentId: agent.id }) },
+    );
+    await res.text();
+    expect(completedEvents()[0]).toMatchObject({ chat_surface: 'embed', host_domain: 'parent.customer.example' });
+  });
+
+  it('drops an invalid hostDomain and never records our own host', async () => {
+    const agent = await makeAgent('reef.example');
+    for (const hostDomain of ['https://evil.example/path', 'user@evil.example', 'a'.repeat(300), 42, 'host:8080']) {
+      vi.mocked(captureServer).mockClear();
+      vi.mocked(buildChain).mockReturnValue([{ name: 'cerebras', model: new MockLanguageModelV4({ doStream: async () => ({ stream: streamOf(answerParts('Widget fins')) }) }) }]);
+      const res = await widgetPost(
+        new Request('https://app.sharkbyte.test/api/widget/x', {
+          method: 'POST',
+          headers: { origin: 'https://app.sharkbyte.test', host: 'app.sharkbyte.test' },
+          body: JSON.stringify({ messages: [userMessage('hi')], hostDomain }),
+        }),
+        { params: Promise.resolve({ agentId: agent.id }) },
+      );
+      await res.text();
+      expect(completedEvents()[0]).toMatchObject({ host_domain: null });
+    }
+  });
+
+  it('the site route ignores a hostDomain in the body', async () => {
+    const agent = await makeAgent('reef.example');
+    useModel(answerParts('Site fins'));
+    const res = await chatPost(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        body: JSON.stringify({ agentId: agent.id, messages: [userMessage('hi')], hostDomain: 'x.example' }),
+      }),
+    );
+    await res.text();
+    expect(completedEvents()[0]).toMatchObject({ chat_surface: 'site', host_domain: null });
   });
 
   it('host_domain falls back to the Referer hostname, and the site route is not embed', async () => {
