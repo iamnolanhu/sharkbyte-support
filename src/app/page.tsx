@@ -8,8 +8,8 @@ import { UrlInput } from '@/components/url-input';
 import { ProgressIndicator } from '@/components/progress-indicator';
 import { WaveBackground } from '@/components/wave-background';
 import { SammyAvatar } from '@/components/sammy-avatar';
-import { Footer } from '@/components/footer';
 import { TIMING } from '@/lib/config';
+import { track } from '@/lib/analytics/client';
 import { saveStoredAgent } from '@/lib/stored-agents';
 import type { AgentStatusResponse, CreateAgentApiResponse } from '@/types';
 
@@ -25,6 +25,13 @@ function errorText(body: unknown, fallback: string): string {
     if (typeof error === 'string' && error) return error;
   }
   return fallback;
+}
+
+/** The free-tier rail an error response names, if any. */
+function railOf(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null || !('rail' in body)) return undefined;
+  const { rail } = body as { rail: unknown };
+  return typeof rail === 'string' && rail ? rail : undefined;
 }
 
 export default function Home() {
@@ -63,9 +70,11 @@ export default function Home() {
         if (status.message) setStatusMessage(status.message);
 
         if (status.status === 'ready') {
+          track('agent_ready');
           setStep('ready');
           router.push(`/agents/${agentId}`);
         } else if (status.status === 'failed') {
+          track('agent_failed');
           setStep('error');
           setError(status.error || 'Sammy could not read that site. Try another one.');
           setIsSubmitting(false);
@@ -85,6 +94,7 @@ export default function Home() {
     setIsSubmitting(true);
     setStep('creating');
     setError('');
+    track('agent_create_submitted');
 
     try {
       const res = await fetch('/api/create-agent', {
@@ -95,6 +105,8 @@ export default function Home() {
       const data: unknown = await res.json();
 
       if (!res.ok) {
+        const rail = railOf(data);
+        if (rail) track('demo_limit_hit', { rail });
         throw new Error(errorText(data, 'Failed to create agent'));
       }
       const created = data as CreateAgentApiResponse;
@@ -231,15 +243,6 @@ export default function Home() {
                   <p className="text-[10px] sm:text-xs md:text-sm text-muted-foreground leading-tight">{feature.desc}</p>
                 </div>
               ))}
-            </motion.div>
-
-            {/* Footer */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.6 }}
-            >
-              <Footer />
             </motion.div>
           </motion.div>
         ) : (

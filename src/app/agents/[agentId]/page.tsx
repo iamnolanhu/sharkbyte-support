@@ -25,10 +25,10 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { AgentHistory } from '@/components/agent-history';
 import { SammyAvatar } from '@/components/sammy-avatar';
 import { Button } from '@/components/ui/button';
-import { Footer } from '@/components/footer';
 import { MobileMenu, MobileMenuItem } from '@/components/mobile-menu';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { TIMING } from '@/lib/config';
+import { track } from '@/lib/analytics/client';
 import { ownerHeaders, removeStoredAgent } from '@/lib/stored-agents';
 import type { AgentStatusResponse, GetAgentResponse, PublicAgent } from '@/types';
 
@@ -535,6 +535,7 @@ export default function AgentManagementPage() {
                     className="absolute top-2 right-2 gap-1"
                     onClick={() => {
                       navigator.clipboard.writeText(snippet);
+                      track('embed_code_copied');
                       setCopied(true);
                       setTimeout(() => setCopied(false), 2000);
                     }}
@@ -599,11 +600,6 @@ export default function AgentManagementPage() {
           )}
         </div>
       </main>
-
-      {/* Footer */}
-      <div className="py-4 border-t border-border bg-card/50">
-        <Footer />
-      </div>
 
       {/* Delete Confirmation Dialog */}
       <ConfirmDialog

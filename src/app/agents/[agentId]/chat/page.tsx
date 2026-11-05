@@ -11,7 +11,6 @@ import { ChatMessage, ChatMessageSkeleton } from '@/components/chat-message';
 import { ChatInput } from '@/components/chat-input';
 import { SammyAvatar } from '@/components/sammy-avatar';
 import { Button } from '@/components/ui/button';
-import { Footer } from '@/components/footer';
 import { MobileMenu, MobileMenuItem } from '@/components/mobile-menu';
 import { useChat } from '@/components/chat';
 import type { AgentStatus, AgentStatusResponse, ApiErrorBody, GetAgentResponse, PublicAgent } from '@/types';
@@ -330,11 +329,6 @@ export default function ChatPage() {
           )}
         </div>
       )}
-
-      {/* Footer */}
-      <div className="py-4 border-t border-border bg-card/50">
-        <Footer />
-      </div>
     </div>
   );
 }

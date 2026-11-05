@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import { Analytics } from "@vercel/analytics/react";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
-import { DemoChatWidget } from "@/components/demo-chat-widget";
+import { SiteChrome } from "@/components/site-chrome";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -14,7 +13,7 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://sharkbyte-support.vercel.app"),
   title: "SharkByte Support",
   description: "Smart support in every byte. Transform any website into an AI-powered customer support agent.",
-  keywords: ["AI", "chatbot", "customer support", "DigitalOcean", "Gradient AI"],
+  keywords: ["AI", "chatbot", "customer support"],
   icons: {
     icon: "/sammy/transparent/sammy-front-transparent.png",
     apple: "/sammy/transparent/sammy-front-transparent.png",
@@ -41,9 +40,8 @@ export default function RootLayout({
           themes={["light", "dark", "ocean"]}
         >
           {children}
-          <DemoChatWidget />
+          <SiteChrome />
         </ThemeProvider>
-        <Analytics />
       </body>
     </html>
   );

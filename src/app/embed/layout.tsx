@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { AnalyticsProvider } from '@/lib/analytics/client';
 
 export const metadata: Metadata = {
   title: 'SharkByte Chat Widget',
@@ -24,7 +25,7 @@ export default function EmbedLayout({
       }}
       data-embed-container="true"
     >
-      {children}
+      <AnalyticsProvider surface="embed">{children}</AnalyticsProvider>
     </div>
   );
 }

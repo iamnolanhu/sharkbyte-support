@@ -21,6 +21,16 @@ import {
   MaximizeIcon,
   MinimizeIcon,
 } from './chat';
+import { track } from '@/lib/analytics/client';
+
+/** Hostname of the page embedding this iframe, or 'unknown'. */
+function referrerHost(): string {
+  try {
+    return new URL(document.referrer).hostname || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 interface EmbedChatWidgetProps {
   agentId: string;
@@ -519,7 +529,10 @@ export function EmbedChatWidget({
           </div>
         ) : (
           <button
-            onClick={() => setIsOpen(true)}
+            onClick={() => {
+              setIsOpen(true);
+              track('embed_widget_opened', { host_domain: referrerHost() });
+            }}
             style={{
               width: '64px',
               height: '64px',

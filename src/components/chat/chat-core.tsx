@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useChat as useAiChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
+import { track } from '@/lib/analytics/client';
 
 export interface ChatMessage {
   id: string;
@@ -85,7 +86,7 @@ export function toChatMessages(messages: UIMessage[]): ChatMessage[] {
  * Shared chat logic: the AI SDK chat over the UI message stream, plus the input box,
  * local error bubbles and scroll-to-bottom behaviour both widgets and the chat page use.
  */
-export function useChat({ apiUrl, agentId, onError }: UseChatOptions): UseChatReturn {
+export function useChat({ apiUrl, agentId, surface, onError }: UseChatOptions): UseChatReturn {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -112,10 +113,12 @@ export function useChat({ apiUrl, agentId, onError }: UseChatOptions): UseChatRe
       console.error('Chat error:', error);
       onError?.(error);
       errorCountRef.current += 1;
+      const copy = chatErrorCopy(error);
+      if (copy.rail) track('demo_limit_hit', { rail: copy.rail });
       const bubble: UIMessage = {
         id: `${LOCAL_ERROR_PREFIX}${errorCountRef.current}`,
         role: 'assistant',
-        parts: [{ type: 'text', text: chatErrorCopy(error).text }],
+        parts: [{ type: 'text', text: copy.text }],
       };
       setMessages((prev) => [...prev, bubble]);
     },
@@ -150,6 +153,7 @@ export function useChat({ apiUrl, agentId, onError }: UseChatOptions): UseChatRe
   const sendText = (text: string): void => {
     const trimmed = text.trim();
     if (!trimmed || isLoading) return;
+    track('chat_message_sent', { surface });
     void chat.sendMessage({ text: trimmed });
   };
 
@@ -157,6 +161,7 @@ export function useChat({ apiUrl, agentId, onError }: UseChatOptions): UseChatRe
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
     setInput('');
+    track('chat_message_sent', { surface });
     await chat.sendMessage({ text: trimmed });
   };
 
