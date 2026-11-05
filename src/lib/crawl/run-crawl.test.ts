@@ -236,6 +236,54 @@ describe('runCrawl', () => {
     expect(deps.capture.mock.calls[0]?.[1]).toMatchObject({ status: 'failed', chunks: 0 });
   });
 
+  it('skips a page whose embedding throws and finishes ready with the rest', async () => {
+    const id = await newAgent('flaky.example');
+    const embed = vi.fn<EmbedFn>(async (texts, inputType) => {
+      if (texts.some((t) => t.includes('flaky.example/a '))) throw new Error('NVIDIA embeddings failed with HTTP 500');
+      return fakeEmbed(texts, inputType);
+    });
+    const deps = makeDeps({ fetcher: siteFetcher('flaky.example', { '/': 2, '/a': 2, '/b': 2 }), embed });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const outcome = await runCrawl(id, deps);
+
+    expect(logged).toHaveBeenCalled();
+    logged.mockRestore();
+    expect(outcome).toMatchObject({ status: 'ready', pagesCrawled: 2, pagesTotal: 3, chunkCount: 4 });
+    const agent = await getAgentById(db, id);
+    expect(agent).toMatchObject({ status: 'ready', chunkCount: 4, lastError: null });
+    expect((await storedChunks(id)).some((r) => r.content.includes('flaky.example/a '))).toBe(false);
+  });
+
+  it('gives every embedding call the crawl time-budget signal', async () => {
+    const id = await newAgent('timed.example');
+    const embed = vi.fn<EmbedFn>(fakeEmbed);
+
+    await runCrawl(id, makeDeps({ fetcher: siteFetcher('timed.example', { '/': 1, '/a': 1 }), embed }));
+
+    expect(embed).toHaveBeenCalledTimes(2);
+    for (const call of embed.mock.calls) {
+      const signal = call[2]?.signal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
+    }
+  });
+
+  it('skips a page whose fetch throws', async () => {
+    const id = await newAgent('rocky.example');
+    const site = siteFetcher('rocky.example', { '/': 2, '/a': 2 });
+    const fetcher: Fetcher = async (url, accept) => {
+      if (url === 'https://rocky.example/a') throw new Error('socket hang up');
+      return site(url, accept);
+    };
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const outcome = await runCrawl(id, makeDeps({ fetcher }));
+
+    logged.mockRestore();
+    expect(outcome).toMatchObject({ status: 'ready', pagesCrawled: 1, chunkCount: 2 });
+  });
+
   it('marks failed when embedding throws', async () => {
     const id = await newAgent('broken.example');
     const deps = makeDeps({

@@ -43,6 +43,8 @@ export const CRAWL_ERROR_COPY =
 
 /** Seconds kept free before the function's maxDuration to finish up and report. */
 const FINISH_MARGIN_S = 20;
+/** Embedding calls still in flight are aborted this long before maxDuration, so the finish always runs. */
+const EMBED_STOP_MARGIN_S = 10;
 
 interface PageText {
   title: string;
@@ -67,16 +69,20 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
   const { db, limits } = deps;
   const start = deps.now();
   const deadline = start + (limits.crawlMaxDurationS - FINISH_MARGIN_S) * 1000;
+  // Pages only start before `deadline`; this also stops a page's embeddings that run past it.
+  const embedSignal = AbortSignal.timeout((limits.crawlMaxDurationS - EMBED_STOP_MARGIN_S) * 1000);
 
   let pagesTotal = 0;
   let pagesCrawled = 0;
   let chunkCount = 0;
-  /** Stop taking new pages (time budget, a full agent, or a failure); pages in flight still finish. */
+  /** Stop taking new pages (time budget or a full agent); pages in flight still finish. */
   let stopped = false;
   /** No room left (per-agent cap or global ceiling): in-flight pages are dropped. */
   let full = false;
   let ceilingReached = false;
+  /** A crawl-level failure (the agent or discovery); a failed page is only skipped. */
   let failure: unknown = null;
+  let pagesSkipped = 0;
 
   // Inserts and progress updates run one at a time, so `pos` and the per-agent cap stay exact.
   let writeQueue: Promise<void> = Promise.resolve();
@@ -114,7 +120,7 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
     const opts = { targetTokens: limits.chunkTargetTokens, overlapTokens: limits.chunkOverlapTokens };
     // Embed only what can still fit under the per-agent cap; storePage trims again in the write queue.
     const chunks = (page ? chunkText(page.text, opts) : []).slice(0, Math.max(0, limits.maxChunksPerAgent - chunkCount));
-    const vectors = chunks.length > 0 ? await deps.embed(chunks, 'passage') : [];
+    const vectors = chunks.length > 0 ? await deps.embed(chunks, 'passage', { signal: embedSignal }) : [];
     if (vectors.length !== chunks.length) throw new Error('Embedding count mismatch');
     await storePage(url, page, chunks, vectors);
   };
@@ -128,7 +134,7 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
 
     let next = 0;
     const worker = async (): Promise<void> => {
-      while (!stopped && failure === null && next < urls.length) {
+      while (!stopped && next < urls.length) {
         if (deps.now() >= deadline) {
           stopped = true;
           break;
@@ -137,8 +143,9 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
         try {
           await crawlPage(url);
         } catch (err) {
-          failure ??= err;
-          stopped = true;
+          // One bad page (a fetch error, an embedding 5xx/429) must not sink the pages already stored.
+          pagesSkipped += 1;
+          console.error(`[crawl] ${agentId} skipped a page:`, err instanceof Error ? err.message : 'unknown error');
         }
       }
     };
@@ -158,7 +165,8 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
     status = 'ready';
   } else {
     status = 'failed';
-    lastError = ceilingReached ? RAIL_COPY.capacity : UNREADABLE_COPY;
+    if (ceilingReached) lastError = RAIL_COPY.capacity;
+    else lastError = pagesSkipped > 0 ? CRAWL_ERROR_COPY : UNREADABLE_COPY;
   }
 
   try {
