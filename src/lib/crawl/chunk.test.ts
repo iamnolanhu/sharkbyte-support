@@ -15,6 +15,12 @@ describe('chunkText', () => {
     for (const p of paras) expect(all).toContain(p);
   });
 
+  it('packs several short paragraphs into one chunk', () => {
+    const paras = ['a'.repeat(100), 'b'.repeat(100), 'c'.repeat(100)];
+    const chunks = chunkText(paras.join('\n\n'), { targetTokens: 200, overlapTokens: 10 });
+    expect(chunks).toEqual([paras.join('\n\n')]);
+  });
+
   it('overlaps consecutive chunks', () => {
     const paras = Array.from({ length: 6 }, (_, i) => String.fromCharCode(97 + i).repeat(400));
     const chunks = chunkText(paras.join('\n\n'), { targetTokens: 200, overlapTokens: 20 });
