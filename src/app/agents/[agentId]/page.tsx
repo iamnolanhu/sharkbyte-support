@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft,
   MessageCircle,
   Globe,
-  Upload,
-  Database,
+  FileText,
+  Layers,
   RefreshCw,
   Trash2,
   Save,
@@ -18,6 +18,7 @@ import {
   Code,
   Copy,
   Check,
+  History,
 } from 'lucide-react';
 import Link from 'next/link';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -27,46 +28,29 @@ import { Button } from '@/components/ui/button';
 import { Footer } from '@/components/footer';
 import { MobileMenu, MobileMenuItem } from '@/components/mobile-menu';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { History } from 'lucide-react';
-import type { AgentWithKBs, KnowledgeBaseInfo } from '@/types';
+import { TIMING } from '@/lib/config';
+import { ownerHeaders, removeStoredAgent } from '@/lib/stored-agents';
+import type { AgentStatusResponse, GetAgentResponse, PublicAgent } from '@/types';
 
-function KBCard({
-  kb,
+const RETIRED_FALLBACK = 'This Sammy has retired — make a new one on the home page.';
+
+function errorText(body: unknown, fallback: string): string {
+  if (typeof body === 'object' && body !== null && 'error' in body) {
+    const { error } = body as { error: unknown };
+    if (typeof error === 'string' && error) return error;
+  }
+  return fallback;
+}
+
+function StatCard({
   icon: Icon,
   title,
-  description,
+  value,
 }: {
-  kb: KnowledgeBaseInfo | null;
   icon: React.ElementType;
   title: string;
-  description: string;
+  value: string;
 }) {
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'indexed':
-        return 'text-green-500';
-      case 'indexing':
-        return 'text-yellow-500';
-      case 'error':
-        return 'text-red-500';
-      default:
-        return 'text-muted-foreground';
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'indexed':
-        return <CheckCircle className="w-4 h-4" />;
-      case 'indexing':
-        return <Loader2 className="w-4 h-4 animate-spin" />;
-      case 'error':
-        return <AlertCircle className="w-4 h-4" />;
-      default:
-        return <Loader2 className="w-4 h-4 animate-spin" />;
-    }
-  };
-
   return (
     <div className="border border-border rounded-lg p-4 bg-card">
       <div className="flex items-start gap-3">
@@ -74,39 +58,32 @@ function KBCard({
           <Icon className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="font-medium text-foreground">{title}</h3>
-          <p className="text-sm text-muted-foreground">{description}</p>
-          {kb ? (
-            <div className="mt-2 flex items-center gap-2">
-              <span className={`flex items-center gap-1 ${getStatusColor(kb.status)}`}>
-                {getStatusIcon(kb.status)}
-                <span className="text-sm capitalize">{kb.status}</span>
-              </span>
-              {kb.documentCount !== undefined && (
-                <span className="text-sm text-muted-foreground">
-                  {kb.documentCount} docs
-                </span>
-              )}
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-muted-foreground">Not configured</p>
-          )}
+          <h3 className="text-sm text-muted-foreground">{title}</h3>
+          <p className="font-medium text-foreground">{value}</p>
         </div>
       </div>
     </div>
   );
 }
 
+function embedSnippet(origin: string, agentId: string): string {
+  return `<script
+  src="${origin}/widget.js"
+  data-agent-id="${agentId}"
+  data-primary-color="#0080FF"
+  data-position="bottom-right"
+  async
+></script>`;
+}
+
 export default function AgentManagementPage() {
   const params = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const agentId = params.agentId as string;
-  const isFromIndexing = searchParams.get('indexing') === 'true';
-  const kbId = searchParams.get('kbId');
 
-  const [agent, setAgent] = useState<AgentWithKBs | null>(null);
-  const [accessKey, setAccessKey] = useState<string>('');
+  const [agent, setAgent] = useState<PublicAgent | null>(null);
+  const [isOwner, setIsOwner] = useState(false);
+  const [retiredMessage, setRetiredMessage] = useState<string | null>(null);
   const [instruction, setInstruction] = useState('');
   const [originalInstruction, setOriginalInstruction] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -118,59 +95,37 @@ export default function AgentManagementPage() {
   const [repairSuccess, setRepairSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [agentStatus, setAgentStatus] = useState<'deploying' | 'ready' | 'error' | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
-  const [isLocalhost, setIsLocalhost] = useState(false);
+  const [origin, setOrigin] = useState('');
 
-  // Agent is ready when it has an endpoint and status is ready (or status not yet checked for existing agents)
-  const isAgentReady = Boolean(agent?.endpoint && (agentStatus === 'ready' || agentStatus === null));
-
-  // Check if running locally (only allow delete on localhost)
   useEffect(() => {
-    const hostname = window.location.hostname;
-    setIsLocalhost(hostname === 'localhost' || hostname === '127.0.0.1');
+    setOrigin(window.location.origin);
   }, []);
 
-  useEffect(() => {
-    async function loadAgent() {
+  // Loads the agent; `keepInstruction` leaves a half-typed prompt alone on background refreshes.
+  const loadAgent = useCallback(
+    async (keepInstruction = false) => {
       try {
-        // Check localStorage for existing accessKey first
-        const storedData = localStorage.getItem(`sharkbyte-agent-${agentId}`);
-        const storedAgent = storedData ? JSON.parse(storedData) : null;
-        const existingKey = storedAgent?.accessKey;
+        const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, {
+          headers: ownerHeaders(localStorage, agentId),
+        });
+        const body: unknown = await res.json();
 
-        // Fetch agent data (only request new key if we don't have one stored)
-        const needsNewKey = !existingKey;
-        const res = await fetch(
-          `/api/agents/${agentId}${needsNewKey ? '?includeAccessKey=true&forceNewKey=true' : ''}`
-        );
-        const data = await res.json();
-
-        if (data.success && data.agent) {
-          setAgent(data.agent);
-          setInstruction(data.instruction || '');
-          setOriginalInstruction(data.instruction || '');
-
-          // Use existing key from localStorage, or new key from API
-          const keyToUse = existingKey || data.accessKey || '';
-          if (keyToUse) {
-            setAccessKey(keyToUse);
-            // Store complete agent data in localStorage if we got a new key
-            if (data.accessKey && !existingKey) {
-              const completeAgent = {
-                id: data.agent.uuid,
-                name: data.agent.name,
-                kbId: data.agent.knowledgeBases?.[0]?.uuid || '',
-                url: `https://${data.agent.domain}`,
-                endpoint: data.agent.endpoint || '',
-                accessKey: data.accessKey,
-                createdAt: data.agent.createdAt,
-              };
-              localStorage.setItem(`sharkbyte-agent-${agentId}`, JSON.stringify(completeAgent));
-            }
-          }
-        } else {
-          setError(data.error || 'Agent not found');
+        if (res.status === 404) {
+          removeStoredAgent(localStorage, agentId);
+          setRetiredMessage(errorText(body, RETIRED_FALLBACK));
+          return;
+        }
+        if (!res.ok) {
+          setError(errorText(body, 'Failed to load agent'));
+          return;
+        }
+        const data = body as GetAgentResponse;
+        setAgent(data.agent);
+        setIsOwner(data.isOwner);
+        if (!keepInstruction) {
+          setInstruction(data.agent.instruction);
+          setOriginalInstruction(data.agent.instruction);
         }
       } catch (err) {
         console.error('Failed to fetch agent:', err);
@@ -178,108 +133,62 @@ export default function AgentManagementPage() {
       } finally {
         setIsLoading(false);
       }
-    }
+    },
+    [agentId]
+  );
 
-    loadAgent();
-  }, [agentId]);
-
-  // Poll agent status until ready (continue from homepage polling)
   useEffect(() => {
-    // Skip if no agent loaded yet
-    if (!agent) return;
+    loadAgent();
+  }, [loadAgent]);
 
-    // If agent already has endpoint, it's ready - no need to poll
-    if (agent.endpoint) {
-      if (agentStatus !== 'ready') {
-        setAgentStatus('ready');
-      }
+  const isCrawling = agent?.status === 'crawling';
+
+  // Poll the crawl while it runs, then reload the agent once it settles
+  useEffect(() => {
+    if (!isCrawling) {
+      setStatusMessage('');
       return;
     }
-
-    // No endpoint means agent is still deploying - need to poll
-    // But we need kbId to poll status
-    if (!kbId) {
-      setAgentStatus('deploying');
-      setStatusMessage('Agent is deploying...');
-      return;
-    }
-
-    if (agentStatus === 'ready') return;
 
     let isCancelled = false;
-    const pollInterval = 3000; // Poll every 3 seconds
 
     const checkStatus = async () => {
-      if (isCancelled) return;
-
       try {
-        const res = await fetch(
-          `/api/agent-status?agentId=${agentId}&kbId=${kbId}&url=${encodeURIComponent(agent.domain || '')}`
-        );
-        const data = await res.json();
-
+        const res = await fetch(`/api/agent-status?agentId=${encodeURIComponent(agentId)}`);
+        if (isCancelled) return;
+        if (res.status === 404) {
+          await loadAgent(true);
+          return;
+        }
+        const data = (await res.json()) as Partial<AgentStatusResponse>;
         if (isCancelled) return;
 
-        if (data.status === 'ready') {
-          setAgentStatus('ready');
-          setStatusMessage('');
-          // Reload agent to get updated endpoint
-          // Check localStorage for existing key - don't create new one if we have it
-          const storedData = localStorage.getItem(`sharkbyte-agent-${agentId}`);
-          const storedAgent = storedData ? JSON.parse(storedData) : null;
-          const existingKey = storedAgent?.accessKey;
-          const needsNewKey = !existingKey;
-
-          const agentRes = await fetch(
-            `/api/agents/${agentId}${needsNewKey ? '?includeAccessKey=true&forceNewKey=true' : ''}`
+        if (data.message) setStatusMessage(data.message);
+        if (data.status === 'crawling') {
+          setAgent((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  pagesCrawled: data.pagesCrawled ?? prev.pagesCrawled,
+                  pagesTotal: data.pagesTotal ?? prev.pagesTotal,
+                  chunkCount: data.chunkCount ?? prev.chunkCount,
+                }
+              : prev
           );
-          const agentData = await agentRes.json();
-          if (agentData.success && agentData.agent) {
-            setAgent(agentData.agent);
-            // Use existing key or new key
-            const keyToUse = existingKey || agentData.accessKey || '';
-            if (keyToUse) {
-              setAccessKey(keyToUse);
-              // Store complete agent data if we created a new key
-              if (agentData.accessKey && !existingKey) {
-                const completeAgent = {
-                  id: agentData.agent.uuid,
-                  name: agentData.agent.name,
-                  kbId: agentData.agent.knowledgeBases?.[0]?.uuid || '',
-                  url: `https://${agentData.agent.domain}`,
-                  endpoint: agentData.agent.endpoint || '',
-                  accessKey: agentData.accessKey,
-                  createdAt: agentData.agent.createdAt,
-                };
-                localStorage.setItem(`sharkbyte-agent-${agentId}`, JSON.stringify(completeAgent));
-              }
-            }
-          }
-        } else if (data.status === 'error') {
-          setAgentStatus('error');
-          setStatusMessage(data.message || 'Agent deployment failed');
         } else {
-          // Still deploying/indexing
-          setAgentStatus('deploying');
-          setStatusMessage(data.message || 'Agent is deploying...');
-          // Continue polling
-          setTimeout(checkStatus, pollInterval);
+          await loadAgent(true);
         }
       } catch (err) {
         console.error('Status poll error:', err);
-        if (!isCancelled) {
-          setTimeout(checkStatus, pollInterval);
-        }
       }
     };
 
-    // Start polling
-    checkStatus();
-
+    const interval = setInterval(checkStatus, TIMING.STATUS_POLL_INTERVAL);
     return () => {
       isCancelled = true;
+      clearInterval(interval);
     };
-  }, [agent, agentId, kbId, agentStatus]);
+  }, [isCrawling, agentId, loadAgent]);
 
   const handleSaveInstruction = async () => {
     setIsSaving(true);
@@ -287,20 +196,19 @@ export default function AgentManagementPage() {
     setError(null);
 
     try {
-      const res = await fetch(`/api/agents/${agentId}`, {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...ownerHeaders(localStorage, agentId) },
         body: JSON.stringify({ instruction }),
       });
+      const body: unknown = await res.json();
 
-      const data = await res.json();
-
-      if (data.success) {
+      if (res.ok) {
         setOriginalInstruction(instruction);
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3000);
       } else {
-        setError(data.error || 'Failed to save');
+        setError(errorText(body, 'Failed to save'));
       }
     } catch (err) {
       console.error('Failed to save instruction:', err);
@@ -315,18 +223,17 @@ export default function AgentManagementPage() {
     setError(null);
 
     try {
-      const res = await fetch(`/api/agents/${agentId}`, {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, {
         method: 'DELETE',
+        headers: ownerHeaders(localStorage, agentId),
       });
+      const body: unknown = await res.json();
 
-      const data = await res.json();
-
-      if (data.success) {
-        // Clear localStorage
-        localStorage.removeItem(`sharkbyte-agent-${agentId}`);
+      if (res.ok) {
+        removeStoredAgent(localStorage, agentId);
         router.push('/');
       } else {
-        setError(data.error || 'Failed to delete');
+        setError(errorText(body, 'Failed to delete'));
         setIsDeleting(false);
         setShowDeleteConfirm(false);
       }
@@ -344,23 +251,22 @@ export default function AgentManagementPage() {
     setError(null);
 
     try {
-      const res = await fetch(`/api/agents/${agentId}/repair`, {
+      const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/repair`, {
         method: 'POST',
+        headers: ownerHeaders(localStorage, agentId),
       });
+      const body: unknown = await res.json();
 
-      const data = await res.json();
-
-      if (data.success) {
-        setRepairSuccess(data.message);
+      if (res.ok) {
+        const message =
+          typeof body === 'object' && body !== null && 'message' in body
+            ? String((body as { message: unknown }).message)
+            : 'Sammy is diving back in.';
+        setRepairSuccess(message);
         setTimeout(() => setRepairSuccess(null), 5000);
-        // Refresh agent data to show updated KBs
-        const agentRes = await fetch(`/api/agents/${agentId}`);
-        const agentData = await agentRes.json();
-        if (agentData.success && agentData.agent) {
-          setAgent(agentData.agent);
-        }
+        await loadAgent(true);
       } else {
-        setError(data.error || 'Failed to repair');
+        setError(errorText(body, 'Failed to repair'));
       }
     } catch (err) {
       console.error('Failed to repair agent:', err);
@@ -371,11 +277,8 @@ export default function AgentManagementPage() {
   };
 
   const hasChanges = instruction !== originalInstruction;
-
-  // Find KBs by type
-  const crawlKB = agent?.knowledgeBases.find((kb) => kb.type === 'crawl') || null;
-  const uploadsKB = agent?.knowledgeBases.find((kb) => kb.type === 'uploads') || null;
-  const structuredKB = agent?.knowledgeBases.find((kb) => kb.type === 'structured') || null;
+  const isAgentReady = agent?.status === 'ready';
+  const snippet = agent && origin ? embedSnippet(origin, agentId) : '';
 
   if (isLoading) {
     return (
@@ -388,10 +291,22 @@ export default function AgentManagementPage() {
     );
   }
 
+  if (retiredMessage) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center px-4">
+          <SammyAvatar size="xl" className="mx-auto mb-4" />
+          <p className="text-foreground mb-4">{retiredMessage}</p>
+          <Button onClick={() => router.push('/')}>Go Home</Button>
+        </div>
+      </div>
+    );
+  }
+
   if (error && !agent) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
+        <div className="text-center px-4">
           <SammyAvatar size="xl" className="mx-auto mb-4" />
           <p className="text-destructive mb-4">{error}</p>
           <Button onClick={() => router.push('/')}>Go Home</Button>
@@ -431,7 +346,7 @@ export default function AgentManagementPage() {
           {/* Right section */}
           <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
             {/* Status - hidden on mobile */}
-            {!isAgentReady && statusMessage && (
+            {isCrawling && statusMessage && (
               <span className="hidden sm:flex text-xs text-muted-foreground items-center gap-1">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 {statusMessage}
@@ -444,14 +359,14 @@ export default function AgentManagementPage() {
               className="gap-1 sm:gap-2 px-2 sm:px-4"
               size="sm"
               disabled={!isAgentReady}
-              title={!isAgentReady ? 'Agent is still deploying...' : undefined}
+              title={isCrawling ? 'Sammy is still reading your site...' : undefined}
             >
-              {!isAgentReady ? (
+              {isCrawling ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <MessageCircle className="w-4 h-4" />
               )}
-              <span className="hidden sm:inline">{isAgentReady ? 'Open Chat' : 'Deploying...'}</span>
+              <span className="hidden sm:inline">{isCrawling ? 'Reading...' : 'Open Chat'}</span>
             </Button>
 
             {/* Desktop: Show AgentHistory and ThemeToggle */}
@@ -466,11 +381,10 @@ export default function AgentManagementPage() {
                 icon={<History className="w-5 h-5" />}
                 label="Agent History"
                 onClick={() => {
-                  // This will be handled by navigating to agents list or showing inline
                   router.push('/');
                 }}
               />
-              {!isAgentReady && statusMessage && (
+              {isCrawling && statusMessage && (
                 <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
                   <Loader2 className="w-4 h-4 animate-spin" />
                   {statusMessage}
@@ -484,76 +398,26 @@ export default function AgentManagementPage() {
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto p-4 space-y-8">
-          {/* Agent Settings */}
-          <motion.section
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
-            <h2 className="text-lg font-semibold text-foreground mb-4">
-              Agent Settings
-            </h2>
-            <div className="border border-border rounded-lg p-4 bg-card">
-              <label className="block text-sm font-medium text-foreground mb-2">
-                System Prompt
-              </label>
-              <textarea
-                value={instruction}
-                onChange={(e) => setInstruction(e.target.value)}
-                rows={6}
-                className="w-full p-3 rounded-lg border border-border bg-background text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="Enter the system prompt for your agent..."
-              />
-              <div className="flex items-center justify-between mt-4">
-                {error && (
-                  <p className="text-sm text-destructive">{error}</p>
-                )}
-                {saveSuccess && (
-                  <p className="text-sm text-green-500 flex items-center gap-1">
-                    <CheckCircle className="w-4 h-4" />
-                    Saved successfully
-                  </p>
-                )}
-                {!error && !saveSuccess && <div />}
+          {/* Status */}
+          <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-foreground">Sammy&apos;s Knowledge</h2>
+              {isOwner && (
                 <Button
-                  onClick={handleSaveInstruction}
-                  disabled={!hasChanges || isSaving}
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRepair}
+                  disabled={isRepairing || isCrawling}
                   className="gap-2"
                 >
-                  {isSaving ? (
+                  {isRepairing ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
-                    <Save className="w-4 h-4" />
+                    <RefreshCw className="w-4 h-4" />
                   )}
-                  Save Changes
+                  Repair
                 </Button>
-              </div>
-            </div>
-          </motion.section>
-
-          {/* Knowledge Bases */}
-          <motion.section
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-foreground">
-                Knowledge Bases
-              </h2>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRepair}
-                disabled={isRepairing}
-                className="gap-2"
-              >
-                {isRepairing ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="w-4 h-4" />
-                )}
-                Repair KBs
-              </Button>
+              )}
             </div>
             {repairSuccess && (
               <div className="mb-4 p-3 rounded-lg bg-green-500/10 border border-green-500/30">
@@ -564,29 +428,87 @@ export default function AgentManagementPage() {
               </div>
             )}
             <div className="grid gap-4 md:grid-cols-3">
-              <KBCard
-                kb={crawlKB}
+              <StatCard
                 icon={Globe}
-                title="Website Crawl"
-                description="Data scraped from your website"
+                title="Status"
+                value={
+                  agent?.status === 'ready'
+                    ? 'Ready'
+                    : agent?.status === 'failed'
+                    ? 'Failed'
+                    : 'Reading your site...'
+                }
               />
-              <KBCard
-                kb={uploadsKB}
-                icon={Upload}
-                title="Uploaded Documents"
-                description="PDFs, TXT, and DOCX files"
+              <StatCard
+                icon={FileText}
+                title="Pages read"
+                value={
+                  agent && agent.pagesTotal > 0
+                    ? `${agent.pagesCrawled} of ${agent.pagesTotal}`
+                    : `${agent?.pagesCrawled ?? 0}`
+                }
               />
-              <KBCard
-                kb={structuredKB}
-                icon={Database}
-                title="Structured Data"
-                description="JSON, CSV, and FAQ data"
-              />
+              <StatCard icon={Layers} title="Chunks" value={`${agent?.chunkCount ?? 0}`} />
             </div>
-            <p className="text-sm text-muted-foreground mt-4">
-              File uploads and re-crawling coming soon.
-            </p>
+            {agent?.status === 'failed' && agent.lastError && (
+              <div className="mt-4 p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                <p className="text-sm text-destructive flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  {agent.lastError}
+                </p>
+              </div>
+            )}
+            {!isOwner && (
+              <p className="text-sm text-muted-foreground mt-4">
+                You are viewing this Sammy read-only. Settings are only available in the browser that created it.
+              </p>
+            )}
           </motion.section>
+
+          {/* Agent Settings (owner only) */}
+          {isOwner && (
+            <motion.section
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+            >
+              <h2 className="text-lg font-semibold text-foreground mb-4">Agent Settings</h2>
+              <div className="border border-border rounded-lg p-4 bg-card">
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  System Prompt
+                </label>
+                <textarea
+                  value={instruction}
+                  onChange={(e) => setInstruction(e.target.value)}
+                  rows={6}
+                  className="w-full p-3 rounded-lg border border-border bg-background text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder="Enter the system prompt for your agent..."
+                />
+                <div className="flex items-center justify-between mt-4">
+                  {error && <p className="text-sm text-destructive">{error}</p>}
+                  {saveSuccess && (
+                    <p className="text-sm text-green-500 flex items-center gap-1">
+                      <CheckCircle className="w-4 h-4" />
+                      Saved successfully
+                    </p>
+                  )}
+                  {!error && !saveSuccess && <div />}
+                  <Button
+                    onClick={handleSaveInstruction}
+                    disabled={!hasChanges || isSaving}
+                    className="gap-2"
+                  >
+                    {isSaving ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Save className="w-4 h-4" />
+                    )}
+                    Save Changes
+                  </Button>
+                </div>
+              </div>
+            </motion.section>
+          )}
 
           {/* Embed Code */}
           <motion.section
@@ -602,33 +524,17 @@ export default function AgentManagementPage() {
               <p className="text-sm text-muted-foreground mb-4">
                 Add this code to your website to embed the chat widget. Place it just before the closing <code className="bg-muted px-1 rounded">&lt;/body&gt;</code> tag.
               </p>
-              {accessKey ? (
+              {snippet ? (
                 <div className="relative">
                   <pre className="bg-muted p-4 rounded-lg overflow-x-auto text-sm">
-                    <code className="text-foreground">{`<script
-  src="https://sharkbyte-support.vercel.app/widget.js"
-  data-agent-id="${agentId}"
-  data-endpoint="${agent?.endpoint || ''}"
-  data-access-key="${accessKey}"
-  data-primary-color="#0080FF"
-  data-position="bottom-right"
-  async
-></script>`}</code>
+                    <code className="text-foreground">{snippet}</code>
                   </pre>
                   <Button
                     variant="outline"
                     size="sm"
                     className="absolute top-2 right-2 gap-1"
                     onClick={() => {
-                      navigator.clipboard.writeText(`<script
-  src="https://sharkbyte-support.vercel.app/widget.js"
-  data-agent-id="${agentId}"
-  data-endpoint="${agent?.endpoint || ''}"
-  data-access-key="${accessKey}"
-  data-primary-color="#0080FF"
-  data-position="bottom-right"
-  async
-></script>`);
+                      navigator.clipboard.writeText(snippet);
                       setCopied(true);
                       setTimeout(() => setCopied(false), 2000);
                     }}
@@ -662,35 +568,35 @@ export default function AgentManagementPage() {
             </div>
           </motion.section>
 
-          {/* Danger Zone */}
-          <motion.section
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-          >
-            <h2 className="text-lg font-semibold text-foreground mb-4">
-              Danger Zone
-            </h2>
-            <div className="border border-destructive/50 rounded-lg p-4 bg-destructive/5">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div>
-                  <h3 className="font-medium text-foreground">Delete Agent</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Permanently delete this agent and all its knowledge bases
-                  </p>
+          {/* Danger Zone (owner only) */}
+          {isOwner && (
+            <motion.section
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+            >
+              <h2 className="text-lg font-semibold text-foreground mb-4">Danger Zone</h2>
+              <div className="border border-destructive/50 rounded-lg p-4 bg-destructive/5">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div>
+                    <h3 className="font-medium text-foreground">Delete Agent</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Permanently delete this agent and everything Sammy learned
+                    </p>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    onClick={() => setShowDeleteConfirm(true)}
+                    disabled={isDeleting}
+                    className="gap-2 min-h-[44px] w-full sm:w-auto"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete
+                  </Button>
                 </div>
-                <Button
-                  variant="destructive"
-                  onClick={() => setShowDeleteConfirm(true)}
-                  disabled={isDeleting}
-                  className="gap-2 min-h-[44px] w-full sm:w-auto"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Delete
-                </Button>
               </div>
-            </div>
-          </motion.section>
+            </motion.section>
+          )}
         </div>
       </main>
 
@@ -704,14 +610,12 @@ export default function AgentManagementPage() {
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
         title="Delete Agent"
-        description="Are you sure you want to delete this agent and all its knowledge bases? This action cannot be undone."
+        description="Are you sure you want to delete this agent and everything it learned? This action cannot be undone."
         confirmLabel="Delete"
         cancelLabel="Cancel"
         variant="destructive"
         onConfirm={handleDelete}
         isLoading={isDeleting}
-        confirmDisabled={!isLocalhost}
-        confirmDisabledMessage="Deletion is only available in development mode (localhost)"
       />
     </div>
   );

@@ -9,166 +9,109 @@ import { ProgressIndicator } from '@/components/progress-indicator';
 import { WaveBackground } from '@/components/wave-background';
 import { SammyAvatar } from '@/components/sammy-avatar';
 import { Footer } from '@/components/footer';
+import { TIMING } from '@/lib/config';
+import { saveStoredAgent } from '@/lib/stored-agents';
+import type { AgentStatusResponse, CreateAgentApiResponse } from '@/types';
 
 type CreationStep = 'idle' | 'creating' | 'indexing' | 'ready' | 'error';
 
-interface AgentData {
+interface PendingAgent {
   agentId: string;
-  agentName: string;
-  kbId: string;
-  endpoint: string;
-  accessKey: string;
-  url: string;
-  isExisting: boolean;
 }
 
-const MAX_POLL_ATTEMPTS = 10; // 30 seconds max (10 × 3 seconds) before navigating to chat
+function errorText(body: unknown, fallback: string): string {
+  if (typeof body === 'object' && body !== null && 'error' in body) {
+    const { error } = body as { error: unknown };
+    if (typeof error === 'string' && error) return error;
+  }
+  return fallback;
+}
 
 export default function Home() {
   const router = useRouter();
   const [step, setStep] = useState<CreationStep>('idle');
-  const [agentData, setAgentData] = useState<AgentData | null>(null);
+  const [agentData, setAgentData] = useState<PendingAgent | null>(null);
   const [error, setError] = useState<string>('');
-  const [pollCount, setPollCount] = useState(0);
   const [statusMessage, setStatusMessage] = useState<string>(''); // Dynamic status from API
   const [isSubmitting, setIsSubmitting] = useState(false); // Prevents double-submit
 
-  // Poll for agent status when indexing (with timeout)
+  // Poll the crawl until the agent is ready or fails
   useEffect(() => {
     if (step !== 'indexing' || !agentData) return;
 
-    // Use local variable to track poll count (avoids stale closure issue with state)
-    let localPollCount = 0;
+    let attempts = 0;
+    const { agentId } = agentData;
 
     const pollStatus = async () => {
-      localPollCount++;
-      setPollCount(localPollCount); // Update state for UI if needed
-
-      // Check for timeout - navigate to chat anyway after max attempts
-      if (localPollCount >= MAX_POLL_ATTEMPTS) {
-        // Store in localStorage and navigate to agent dashboard with indexing flag
-        localStorage.setItem(
-          `sharkbyte-agent-${agentData.agentId}`,
-          JSON.stringify({
-            id: agentData.agentId,
-            name: agentData.agentName,
-            kbId: agentData.kbId,
-            url: agentData.url,
-            endpoint: agentData.endpoint,
-            accessKey: agentData.accessKey,
-            createdAt: new Date().toISOString(),
-          })
-        );
-        // Navigate to agent dashboard with indexing flag
-        router.push(`/agents/${agentData.agentId}?indexing=true&kbId=${agentData.kbId}`);
+      attempts++;
+      // Out of patience: the dashboard keeps polling and shows progress
+      if (attempts > TIMING.MAX_POLL_ATTEMPTS) {
+        router.push(`/agents/${agentId}`);
         return;
       }
 
       try {
-        const res = await fetch(
-          `/api/agent-status?agentId=${agentData.agentId}&kbId=${agentData.kbId}&url=${encodeURIComponent(agentData.url || '')}`
-        );
-        const data = await res.json();
-
-        // Update status message if provided
-        if (data.message) {
-          setStatusMessage(data.message);
-        }
-
-        if (data.status === 'ready') {
-          setStep('ready');
-          // Store in localStorage and redirect to agent dashboard
-          localStorage.setItem(
-            `sharkbyte-agent-${agentData.agentId}`,
-            JSON.stringify({
-              id: agentData.agentId,
-              name: agentData.agentName,
-              kbId: agentData.kbId,
-              url: agentData.url,
-              endpoint: agentData.endpoint,
-              accessKey: agentData.accessKey,
-              createdAt: new Date().toISOString(),
-            })
-          );
-          router.push(`/agents/${agentData.agentId}`);
-        } else if (data.status === 'error') {
+        const res = await fetch(`/api/agent-status?agentId=${encodeURIComponent(agentId)}`);
+        const data: unknown = await res.json();
+        if (!res.ok) {
           setStep('error');
-          setError(data.error || 'Failed to create agent');
+          setError(errorText(data, 'The tide went out on that one. Try again.'));
+          setIsSubmitting(false);
+          return;
+        }
+        const status = data as Partial<AgentStatusResponse>;
+        if (status.message) setStatusMessage(status.message);
+
+        if (status.status === 'ready') {
+          setStep('ready');
+          router.push(`/agents/${agentId}`);
+        } else if (status.status === 'failed') {
+          setStep('error');
+          setError(status.error || 'Sammy could not read that site. Try another one.');
+          setIsSubmitting(false);
         }
       } catch (err) {
         console.error('Status poll error:', err);
       }
     };
 
-    const interval = setInterval(pollStatus, 3000);
+    const interval = setInterval(pollStatus, TIMING.STATUS_POLL_INTERVAL);
     return () => clearInterval(interval);
   }, [step, agentData, router]);
 
   const handleSubmit = async (url: string) => {
-    // Prevent double-submit
-    if (isSubmitting) {
-      console.log('[handleSubmit] Already submitting, ignoring');
-      return;
-    }
+    if (isSubmitting) return;
 
-    console.log('[handleSubmit] Starting with URL:', url);
     setIsSubmitting(true);
     setStep('creating');
     setError('');
-    setPollCount(0);
 
     try {
       const res = await fetch('/api/create-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, maxPages: 100 }),
+        body: JSON.stringify({ url }),
       });
+      const data: unknown = await res.json();
 
-      const data = await res.json();
-      console.log('[handleSubmit] API response:', data);
-
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to create agent');
+      if (!res.ok) {
+        throw new Error(errorText(data, 'Failed to create agent'));
       }
+      const created = data as CreateAgentApiResponse;
 
-      const newAgentData: AgentData = {
-        agentId: data.agentId,
-        agentName: data.agentName,
-        kbId: data.kbId,
-        endpoint: data.endpoint,
-        accessKey: data.accessKey,
-        url: data.url,
-        isExisting: data.isExisting,
-      };
-      console.log('[handleSubmit] Setting agentData:', newAgentData);
+      saveStoredAgent(localStorage, {
+        id: created.agentId,
+        name: created.agentName,
+        url: created.url,
+        ...(created.ownerToken ? { ownerToken: created.ownerToken } : {}),
+        createdAt: new Date().toISOString(),
+      });
+      setAgentData({ agentId: created.agentId });
 
-      setAgentData(newAgentData);
-
-      // Check if agent is already ready (existing agent) or needs indexing
-      if (data.status === 'ready' || data.isExisting) {
-        console.log('[handleSubmit] Agent ready, redirecting to dashboard');
-        // Existing agent - ready immediately
+      if (created.isExisting || created.status === 'ready') {
         setStep('ready');
-
-        // Store in localStorage with agent name
-        localStorage.setItem(
-          `sharkbyte-agent-${data.agentId}`,
-          JSON.stringify({
-            id: data.agentId,
-            name: data.agentName,
-            kbId: data.kbId,
-            url: data.url,
-            endpoint: data.endpoint,
-            accessKey: data.accessKey,
-            createdAt: new Date().toISOString(),
-          })
-        );
-
-        // Redirect to agent dashboard
-        router.push(`/agents/${data.agentId}`);
+        router.push(`/agents/${created.agentId}`);
       } else {
-        console.log('[handleSubmit] New agent, setting step to indexing');
-        // New agent - indexing in progress, start polling
         setStep('indexing');
       }
     } catch (err) {
@@ -181,9 +124,9 @@ export default function Home() {
 
   const getProgressSteps = () => [
     {
-      id: 'create-kb',
-      label: 'Creating Knowledge Base',
-      description: 'Setting up website crawler',
+      id: 'create-agent',
+      label: 'Launching Sammy',
+      description: 'Setting up a fresh little shark',
       status:
         step === 'creating'
           ? 'loading'
@@ -195,8 +138,8 @@ export default function Home() {
     },
     {
       id: 'indexing',
-      label: 'Indexing Website',
-      description: statusMessage || 'Crawling and processing pages',
+      label: 'Diving Into Your Site',
+      description: statusMessage || 'Swimming through your pages',
       status:
         step === 'indexing'
           ? 'loading'

@@ -2,10 +2,19 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { History, Globe, Plus, ChevronDown, Loader2 } from 'lucide-react';
+import { History, Globe, Plus, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
-import type { AgentWithKBs } from '@/types';
+import { listStoredAgents } from '@/lib/stored-agents';
+import type { StoredAgent } from '@/types';
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
 
 function formatTimeAgo(dateString: string): string {
   const date = new Date(dateString);
@@ -25,31 +34,13 @@ function formatTimeAgo(dateString: string): string {
 export function AgentHistory() {
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
-  const [agents, setAgents] = useState<AgentWithKBs[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [hasFetched, setHasFetched] = useState(false);
+  const [agents, setAgents] = useState<StoredAgent[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Fetch agents from API when dropdown opens
+  // This browser's own list; no network call. Re-read each time the dropdown opens.
   useEffect(() => {
-    if (isOpen && !hasFetched) {
-      setIsLoading(true);
-      fetch('/api/agents')
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            setAgents(data.agents);
-          }
-        })
-        .catch((err) => {
-          console.error('Failed to fetch agents:', err);
-        })
-        .finally(() => {
-          setIsLoading(false);
-          setHasFetched(true);
-        });
-    }
-  }, [isOpen, hasFetched]);
+    setAgents(listStoredAgents(localStorage));
+  }, [isOpen]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -86,7 +77,7 @@ export function AgentHistory() {
       >
         <History className="w-4 h-4" />
         <span className="hidden sm:inline">History</span>
-        {hasFetched && agents.length > 0 && (
+        {agents.length > 0 && (
           <span className="bg-primary/20 text-primary text-xs px-1.5 py-0.5 rounded-full">
             {agents.length}
           </span>
@@ -110,75 +101,32 @@ export function AgentHistory() {
             </div>
 
             <div className="max-h-64 overflow-y-auto">
-              {isLoading ? (
-                <div className="p-4 text-center text-muted-foreground text-sm">
-                  <Loader2 className="w-6 h-6 mx-auto mb-2 animate-spin" />
-                  <p>Loading chatbots...</p>
-                </div>
-              ) : agents.length === 0 ? (
+              {agents.length === 0 ? (
                 <div className="p-4 text-center text-muted-foreground text-sm">
                   <History className="w-8 h-8 mx-auto mb-2 opacity-50" />
                   <p>No chatbots yet</p>
                   <p className="text-xs mt-1">Create one to get started!</p>
                 </div>
               ) : (
-                agents.map((agent) => {
-                  const isReady = agent.status === 'active';
-                  const statusLabel =
-                    agent.status === 'active'
-                      ? 'Ready'
-                      : agent.status === 'creating'
-                      ? 'Creating...'
-                      : agent.status === 'error'
-                      ? 'Error'
-                      : agent.status;
-
-                  // Count total documents across all KBs
-                  const totalDocs = agent.knowledgeBases.reduce(
-                    (sum, kb) => sum + (kb.documentCount || 0),
-                    0
-                  );
-
-                  return (
-                    <div
-                      key={agent.uuid}
-                      onClick={() => handleNavigate(agent.uuid)}
-                      className="flex items-center gap-3 p-3 transition-colors group hover:bg-muted/50 cursor-pointer"
-                    >
-                      <div
-                        className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                          isReady ? 'bg-primary/10' : 'bg-muted'
-                        }`}
-                      >
-                        <Globe
-                          className={`w-4 h-4 ${
-                            isReady ? 'text-primary' : 'text-muted-foreground'
-                          }`}
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm truncate">
-                          {agent.domain}
-                        </p>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1">
-                          {formatTimeAgo(agent.createdAt)}
-                          {!isReady && (
-                            <span className="text-yellow-500">
-                              {' '}
-                              • {statusLabel}
-                            </span>
-                          )}
-                          {isReady && totalDocs > 0 && (
-                            <span className="text-muted-foreground">
-                              {' '}
-                              • {totalDocs} docs
-                            </span>
-                          )}
-                        </p>
-                      </div>
+                agents.map((agent) => (
+                  <div
+                    key={agent.id}
+                    onClick={() => handleNavigate(agent.id)}
+                    className="flex items-center gap-3 p-3 transition-colors group hover:bg-muted/50 cursor-pointer"
+                  >
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 bg-primary/10">
+                      <Globe className="w-4 h-4 text-primary" />
                     </div>
-                  );
-                })
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm truncate">
+                        {hostOf(agent.url)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatTimeAgo(agent.createdAt)}
+                      </p>
+                    </div>
+                  </div>
+                ))
               )}
             </div>
 

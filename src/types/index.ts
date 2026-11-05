@@ -213,10 +213,8 @@ export interface AgentWithKBs {
 export interface StoredAgent {
   id: string;
   name: string; // Agent display name (e.g., "Sammy - acme.com")
-  kbId: string;
   url: string;
-  endpoint: string;
-  accessKey: string;
+  ownerToken?: string; // only present in the browser that created the agent
   createdAt: string;
 }
 

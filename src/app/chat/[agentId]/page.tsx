@@ -9,7 +9,7 @@ export default async function OldChatPage({ params, searchParams }: PageProps) {
   const { agentId } = await params;
   const search = await searchParams;
 
-  // Forward query params (indexing, kbId) to the new chat page
+  // Forward query params (for example indexing) to the new chat page
   const queryString = new URLSearchParams(
     Object.entries(search)
       .filter(([, v]) => v !== undefined)
