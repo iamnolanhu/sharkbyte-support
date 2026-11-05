@@ -54,6 +54,91 @@ export const APP_DOMAIN = process.env.APP_DOMAIN
   || process.env.VERCEL_PROJECT_PRODUCTION_URL
   || 'sharkbyte-support.vercel.app';
 
+// Default system instruction for a new Sammy
+export function DEFAULT_INSTRUCTION(domain: string): string {
+  return `You are Sammy, a friendly and knowledgeable customer support agent for ${domain}.
+
+Guidelines:
+- Answer questions using ONLY the provided website content and knowledge base
+- If you cannot find the answer, say "I couldn't find that information. Could you rephrase your question?"
+- Be helpful, concise, and friendly in your responses
+- Use a conversational tone while remaining professional
+- If asked about topics outside the knowledge base, politely redirect to relevant topics you can help with`;
+}
+
+// Free-tier limits: quotas, crawl bounds, chat bounds and retention
+export interface Limits {
+  maxPagesPerAgent: number;
+  maxChunksPerAgent: number;
+  maxTotalChunks: number;
+  maxCrawlsPerDay: number;
+  maxChatTokensPerDay: number;
+  maxFirecrawlPerDay: number;
+  createsPerIpPerHour: number;
+  chatMessagesPerIpPerMinute: number;
+  maxUserMessageChars: number;
+  historyMessages: number;
+  maxOutputTokens: number;
+  retrievalTopK: number;
+  retentionDays: number;
+  evictTargetRatio: number;
+  crawlMaxDurationS: number;
+  pageFetchTimeoutMs: number;
+  pageFetchConcurrency: number;
+  pageMaxBytes: number;
+  minPageTextChars: number;
+  chunkTargetTokens: number;
+  chunkOverlapTokens: number;
+  createLockTtlMs: number;
+  failedRetentionHours: number;
+  maxInstructionChars: number;
+  maxChatBodyBytes: number;
+}
+
+/** Environment variables by name (`process.env` fits; tests pass plain objects). */
+export interface EnvVars {
+  readonly [name: string]: string | undefined;
+}
+
+/** Reads a positive integer from `env[name]`; anything else yields `fallback`. */
+export function envInt(env: EnvVars, name: string, fallback: number): number {
+  const raw = env[name]?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return fallback;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+export function getLimits(env: EnvVars = process.env): Limits {
+  return {
+    maxPagesPerAgent: envInt(env, 'MAX_PAGES_PER_AGENT', 30),
+    maxChunksPerAgent: envInt(env, 'MAX_CHUNKS_PER_AGENT', 300),
+    maxTotalChunks: envInt(env, 'MAX_TOTAL_CHUNKS', 40000),
+    maxCrawlsPerDay: envInt(env, 'MAX_CRAWLS_PER_DAY', 50),
+    maxChatTokensPerDay: envInt(env, 'MAX_CHAT_TOKENS_PER_DAY', 500000),
+    maxFirecrawlPerDay: envInt(env, 'MAX_FIRECRAWL_PER_DAY', 50),
+    createsPerIpPerHour: 3,
+    chatMessagesPerIpPerMinute: 20,
+    maxUserMessageChars: 2000,
+    historyMessages: 20,
+    maxOutputTokens: 600,
+    retrievalTopK: 6,
+    retentionDays: 14,
+    evictTargetRatio: 0.8,
+    // Vercel Hobby maximum function duration with Fluid compute
+    crawlMaxDurationS: 300,
+    pageFetchTimeoutMs: 8000,
+    pageFetchConcurrency: 6,
+    pageMaxBytes: 1024 * 1024,
+    minPageTextChars: 200,
+    chunkTargetTokens: 800,
+    chunkOverlapTokens: 100,
+    createLockTtlMs: 2 * 60 * 1000,
+    failedRetentionHours: 24,
+    maxInstructionChars: 4000,
+    maxChatBodyBytes: 65536,
+  };
+}
+
 // Demo Agent Configuration (uses APP_DOMAIN)
 export const DEMO_AGENT_CONFIG = {
   get URL() { return `https://${APP_DOMAIN}`; },

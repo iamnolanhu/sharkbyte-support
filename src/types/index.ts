@@ -260,3 +260,42 @@ export interface DOApiError {
   message: string;
   request_id?: string;
 }
+
+// ============================================
+// Postgres-backed agent types
+// ============================================
+
+export type AgentStatus = 'crawling' | 'ready' | 'failed';
+
+export interface AgentRow {
+  id: string;
+  domain: string;
+  url: string;
+  name: string;
+  instruction: string;
+  status: AgentStatus;
+  pagesCrawled: number;
+  pagesTotal: number;
+  chunkCount: number;
+  createdAt: Date;
+  lastUsedAt: Date;
+  crawlStartedAt: Date | null;
+  lastError: string | null;
+  pinned: boolean;
+  ownerTokenHash: string | null;
+}
+
+export interface ChunkInput {
+  url: string;
+  title: string;
+  pos: number;
+  content: string;
+  embedding: number[];
+}
+
+export interface RetrievedChunk {
+  url: string;
+  title: string;
+  content: string;
+  score: number;
+}
