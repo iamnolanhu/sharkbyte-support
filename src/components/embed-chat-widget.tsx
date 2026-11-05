@@ -23,26 +23,26 @@ import {
 } from './chat';
 
 interface EmbedChatWidgetProps {
-  endpoint: string;
-  accessKey: string;
   agentId: string;
   agentName?: string;
   primaryColor?: string;
   position?: 'bottom-right' | 'bottom-left';
   welcomeMessage?: string;
+  /** Set when the agent no longer exists: the panel shows it and the input is disabled. */
+  retiredMessage?: string;
 }
 
 export function EmbedChatWidget({
-  endpoint,
-  accessKey,
   agentId,
   agentName = CHAT_CONSTANTS.DEFAULT_AGENT_NAME,
   primaryColor = CHAT_CONSTANTS.DEFAULT_PRIMARY_COLOR,
   position = 'bottom-right',
   welcomeMessage,
+  retiredMessage,
 }: EmbedChatWidgetProps) {
-  // Compute default welcome message with agent name
-  const defaultWelcome = welcomeMessage || CHAT_CONSTANTS.getDefaultWelcome(agentName);
+  // Compute default welcome message with agent name; a retired agent shows its notice instead
+  const defaultWelcome = retiredMessage || welcomeMessage || CHAT_CONSTANTS.getDefaultWelcome(agentName);
+  const isRetired = Boolean(retiredMessage);
   const [isOpen, setIsOpen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [theme, setTheme] = useState<Theme>('light');
@@ -60,9 +60,9 @@ export function EmbedChatWidget({
     inputRef,
     handleKeyDown,
   } = useChat({
-    apiUrl: `https://sharkbyte-support.vercel.app/api/widget/${agentId}`,
-    endpoint,
-    accessKey,
+    apiUrl: `/api/widget/${agentId}`,
+    agentId,
+    surface: 'embed',
   });
 
   // Use same theme for both light/dark slots to bypass prefers-color-scheme issues
@@ -326,9 +326,9 @@ export function EmbedChatWidget({
               )}
 
               {/* Message history */}
-              {messages.map((message, i) => (
+              {messages.map((message) => (
                 <div
-                  key={i}
+                  key={message.id}
                   style={{
                     display: 'flex',
                     gap: '8px',
@@ -477,7 +477,7 @@ export function EmbedChatWidget({
                   onKeyDown={handleKeyDown}
                   placeholder="Type a message..."
                   rows={1}
-                  disabled={isLoading}
+                  disabled={isLoading || isRetired}
                   style={{
                     flex: 1,
                     resize: 'none',
@@ -496,7 +496,7 @@ export function EmbedChatWidget({
                 />
                 <button
                   onClick={sendMessage}
-                  disabled={!input.trim() || isLoading}
+                  disabled={!input.trim() || isLoading || isRetired}
                   style={{
                     padding: '10px',
                     borderRadius: '12px',

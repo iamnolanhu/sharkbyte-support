@@ -1,16 +1,19 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useChat as useAiChat } from '@ai-sdk/react';
+import { DefaultChatTransport, type UIMessage } from 'ai';
 
 export interface ChatMessage {
+  id: string;
   role: 'user' | 'assistant';
   content: string;
 }
 
 export interface UseChatOptions {
   apiUrl: string;
-  endpoint: string;
-  accessKey: string;
+  agentId: string;
+  surface: 'site' | 'embed';
   onError?: (error: Error) => void;
 }
 
@@ -19,6 +22,8 @@ export interface UseChatReturn {
   input: string;
   setInput: (value: string) => void;
   sendMessage: () => Promise<void>;
+  sendText: (text: string) => void;
+  clearMessages: () => void;
   isLoading: boolean;
   streamingContent: string;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
@@ -27,155 +32,143 @@ export interface UseChatReturn {
   handleKeyDown: (e: React.KeyboardEvent) => void;
 }
 
+/** Id prefix of the assistant bubbles the client adds for errors; they are never sent to the server. */
+export const LOCAL_ERROR_PREFIX = 'local-error-';
+
+/** History the server reads: the last 10 turns. */
+const MAX_HISTORY_MESSAGES = 20;
+
+const REEF_COPY = 'Sorry, Sammy hit a reef. Please try again.';
+
+/** The POST body for /api/chat and /api/widget/[agentId]. */
+export function buildChatRequestBody(
+  agentId: string,
+  messages: UIMessage[],
+): { agentId: string; messages: UIMessage[] } {
+  const history = messages.filter((m) => !m.id.startsWith(LOCAL_ERROR_PREFIX));
+  return { agentId, messages: history.slice(-MAX_HISTORY_MESSAGES) };
+}
+
 /**
- * Shared chat logic hook
- * Handles message state, streaming, and API communication
+ * What to show for a failed request. The transport puts the response body in the error
+ * message, so an `ApiErrorBody` from the server (rails, retired, not ready) is shown as is.
  */
-export function useChat({
-  apiUrl,
-  endpoint,
-  accessKey,
-  onError,
-}: UseChatOptions): UseChatReturn {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export function chatErrorCopy(error: Error): { text: string; rail?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(error.message);
+  } catch {
+    return { text: REEF_COPY };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { text: REEF_COPY };
+  const body = parsed as Record<string, unknown>;
+  if (body.success !== false || typeof body.error !== 'string' || !body.error) return { text: REEF_COPY };
+  return typeof body.rail === 'string' ? { text: body.error, rail: body.rail } : { text: body.error };
+}
+
+function messageText(message: UIMessage): string {
+  return message.parts.map((part) => (part.type === 'text' ? part.text : '')).join('');
+}
+
+/** User and assistant turns with their text parts joined; system messages and empty turns are dropped. */
+export function toChatMessages(messages: UIMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const message of messages) {
+    if (message.role === 'system') continue;
+    const content = messageText(message);
+    if (content) out.push({ id: message.id, role: message.role, content });
+  }
+  return out;
+}
+
+/**
+ * Shared chat logic: the AI SDK chat over the UI message stream, plus the input box,
+ * local error bubbles and scroll-to-bottom behaviour both widgets and the chat page use.
+ */
+export function useChat({ apiUrl, agentId, onError }: UseChatOptions): UseChatReturn {
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [streamingContent, setStreamingContent] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const errorCountRef = useRef(0);
 
-  // Refs for RAF batching (avoids excessive re-renders during streaming)
-  const rafIdRef = useRef<number | null>(null);
-  const pendingContentRef = useRef<string>('');
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport<UIMessage>({
+        api: apiUrl,
+        prepareSendMessagesRequest: ({ messages }) => ({ body: buildChatRequestBody(agentId, messages) }),
+      }),
+    [apiUrl, agentId],
+  );
 
-  // Helper to scroll messages container to bottom
-  // Uses direct ref to scroll container for reliability
-  const scrollToBottom = () => {
-    const container = scrollContainerRef.current;
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
-  };
+  // The SDK reads the latest transport and callbacks on every request; a new id (another
+  // agent) makes it start a fresh chat.
+  const chat = useAiChat<UIMessage>({
+    id: `${apiUrl}#${agentId}`,
+    transport,
+    // Batch streamed deltas into one render every 50 ms instead of one per token.
+    throttle: 50,
+    onError: (error) => {
+      console.error('Chat error:', error);
+      onError?.(error);
+      errorCountRef.current += 1;
+      const bubble: UIMessage = {
+        id: `${LOCAL_ERROR_PREFIX}${errorCountRef.current}`,
+        role: 'assistant',
+        parts: [{ type: 'text', text: chatErrorCopy(error).text }],
+      };
+      setMessages((prev) => [...prev, bubble]);
+    },
+  });
+  const { setMessages, status } = chat;
 
-  // Auto-scroll when messages array changes
+  const isLoading = status === 'submitted' || status === 'streaming';
+  const last = chat.messages[chat.messages.length - 1];
+  const inFlight = status === 'streaming' && last?.role === 'assistant' ? last : undefined;
+  const streamingContent = inFlight ? messageText(inFlight) : '';
+  const messages = useMemo(
+    () => toChatMessages(inFlight ? chat.messages.slice(0, -1) : chat.messages),
+    [chat.messages, inFlight],
+  );
+
+  // Scroll the messages container to the bottom; the later attempts catch layout shifts after render.
   useEffect(() => {
+    const scrollToBottom = () => {
+      const container = scrollContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    };
     scrollToBottom();
+    const timers = [0, 50, 150].map((ms) => setTimeout(scrollToBottom, ms));
+    return () => timers.forEach(clearTimeout);
   }, [messages]);
 
-  // Scroll during streaming
   useEffect(() => {
-    if (streamingContent) {
-      scrollToBottom();
-    }
+    const container = scrollContainerRef.current;
+    if (streamingContent && container) container.scrollTop = container.scrollHeight;
   }, [streamingContent]);
 
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
+  const sendText = (text: string): void => {
+    const trimmed = text.trim();
+    if (!trimmed || isLoading) return;
+    void chat.sendMessage({ text: trimmed });
+  };
 
-    const userMessage: ChatMessage = { role: 'user', content: input.trim() };
-    setMessages((prev) => [...prev, userMessage]);
+  const sendMessage = async (): Promise<void> => {
+    const trimmed = input.trim();
+    if (!trimmed || isLoading) return;
     setInput('');
-    setIsLoading(true);
-    setStreamingContent('');
+    await chat.sendMessage({ text: trimmed });
+  };
 
-    try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [...messages, userMessage],
-          endpoint,
-          accessKey,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Chat request failed');
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-      let accumulated = '';
-
-      // RAF-based batching: accumulate deltas and update state once per frame
-      // This reduces renders from 50-200+ per response to ~20-30 (one per 16ms frame)
-      const scheduleUpdate = () => {
-        if (rafIdRef.current === null) {
-          rafIdRef.current = requestAnimationFrame(() => {
-            if (pendingContentRef.current) {
-              accumulated += pendingContentRef.current;
-              setStreamingContent(accumulated);
-              pendingContentRef.current = '';
-            }
-            rafIdRef.current = null;
-          });
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('0:')) {
-            try {
-              const data = JSON.parse(line.slice(2));
-              if (data.textDelta) {
-                // Batch deltas instead of updating state immediately
-                pendingContentRef.current += data.textDelta;
-                scheduleUpdate();
-              }
-            } catch {
-              // Ignore parse errors
-            }
-          }
-        }
-      }
-
-      // Flush any remaining content after stream ends
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-      accumulated += pendingContentRef.current;
-      pendingContentRef.current = '';
-
-      setMessages((prev) => [...prev, { role: 'assistant', content: accumulated }]);
-      setStreamingContent('');
-
-      // Multiple scroll attempts with delays to catch any layout shifts
-      // This ensures scroll stays at bottom even after async rendering completes
-      scrollToBottom();
-      setTimeout(scrollToBottom, 0);
-      setTimeout(scrollToBottom, 50);
-      setTimeout(scrollToBottom, 150);
-    } catch (error) {
-      console.error('Chat error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-      if (onError) {
-        onError(error instanceof Error ? error : new Error(errorMessage));
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: "Sorry, I encountered an error. Please try again." },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
+  const clearMessages = (): void => {
+    void chat.stop();
+    setMessages([]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      void sendMessage();
     }
   };
 
@@ -184,6 +177,8 @@ export function useChat({
     input,
     setInput,
     sendMessage,
+    sendText,
+    clearMessages,
     isLoading,
     streamingContent,
     messagesEndRef,

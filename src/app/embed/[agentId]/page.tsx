@@ -1,49 +1,36 @@
 import { EmbedChatWidget } from '@/components/embed-chat-widget';
+import { COPY } from '@/lib/agent-api';
+import { APP_DOMAIN } from '@/lib/config';
+import { getDb } from '@/lib/db/client';
+import { getAgentById } from '@/lib/db/agents';
 
 interface EmbedPageProps {
   params: Promise<{ agentId: string }>;
-  searchParams: Promise<{
-    endpoint?: string;
-    accessKey?: string;
-    color?: string;
-    position?: string;
-    welcome?: string;
-  }>;
+  // Old snippets also send endpoint and access-key params; they are ignored.
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+const DEFAULT_WELCOME = "Hi! I'm Sammy, your AI assistant. How can I help you today?";
+
+function single(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 export default async function EmbedPage({ params, searchParams }: EmbedPageProps) {
   const { agentId } = await params;
-  const { endpoint, accessKey, color, position, welcome } = await searchParams;
-
-  // Credentials are now passed via URL params from widget.js
-  // This eliminates the need for server-side API calls
-  if (!endpoint || !accessKey) {
-    return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100vh',
-        fontFamily: 'system-ui, sans-serif',
-        color: '#666',
-        fontSize: '14px',
-      }}>
-        Widget not available
-      </div>
-    );
-  }
-
-  const defaultWelcome = "Hi! I'm Sammy, your AI assistant. How can I help you today?";
+  const query = await searchParams;
+  const color = single(query.color);
+  const welcome = single(query.welcome);
+  const agent = await getAgentById(getDb(), agentId);
 
   return (
     <EmbedChatWidget
-      endpoint={decodeURIComponent(endpoint)}
-      accessKey={decodeURIComponent(accessKey)}
       agentId={agentId}
       agentName="Sammy"
       primaryColor={color || '#0080FF'}
-      position={(position as 'bottom-right' | 'bottom-left') || 'bottom-right'}
-      welcomeMessage={welcome ? decodeURIComponent(welcome) : defaultWelcome}
+      position={single(query.position) === 'bottom-left' ? 'bottom-left' : 'bottom-right'}
+      welcomeMessage={welcome || DEFAULT_WELCOME}
+      {...(agent ? {} : { retiredMessage: COPY.retired(APP_DOMAIN) })}
     />
   );
 }

@@ -17,8 +17,7 @@ import {
 } from './chat';
 
 interface ChatWidgetProps {
-  endpoint: string;
-  accessKey: string;
+  agentId: string;
   agentName?: string;
   avatarUrl?: string;
   primaryColor?: string;
@@ -27,8 +26,7 @@ interface ChatWidgetProps {
 }
 
 export function ChatWidget({
-  endpoint,
-  accessKey,
+  agentId,
   agentName = CHAT_CONSTANTS.DEFAULT_AGENT_NAME,
   avatarUrl = CHAT_CONSTANTS.AVATAR_URL,
   primaryColor = CHAT_CONSTANTS.DEFAULT_PRIMARY_COLOR,
@@ -55,8 +53,8 @@ export function ChatWidget({
     handleKeyDown,
   } = useChat({
     apiUrl: '/api/chat',
-    endpoint,
-    accessKey,
+    agentId,
+    surface: 'site',
   });
 
   // Use same theme for both light/dark slots to bypass prefers-color-scheme issues
@@ -198,9 +196,9 @@ export function ChatWidget({
               )}
 
               {/* Message history */}
-              {messages.map((message, i) => (
+              {messages.map((message) => (
                 <div
-                  key={i}
+                  key={message.id}
                   className={`flex gap-3 ${message.role === 'user' ? 'flex-row-reverse' : ''}`}
                 >
                   {message.role === 'assistant' && (

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useState, useEffect, useCallback } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ArrowLeft, ExternalLink, Trash2, Settings, X, Loader2, History } from 'lucide-react';
 import Link from 'next/link';
@@ -13,72 +13,63 @@ import { SammyAvatar } from '@/components/sammy-avatar';
 import { Button } from '@/components/ui/button';
 import { Footer } from '@/components/footer';
 import { MobileMenu, MobileMenuItem } from '@/components/mobile-menu';
-import type { ChatMessage as ChatMessageType, StoredAgent } from '@/types';
+import { useChat } from '@/components/chat';
+import type { AgentStatus, AgentStatusResponse, ApiErrorBody, GetAgentResponse, PublicAgent } from '@/types';
+
+const STATUS_POLL_INTERVAL_MS = 5000;
+const RETIRED_FALLBACK = 'This Sammy has retired — make a new one on the home page.';
+
+function errorText(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const error = (body as Partial<ApiErrorBody>).error;
+  return typeof error === 'string' && error ? error : null;
+}
 
 export default function ChatPage() {
   const params = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const agentId = params.agentId as string;
 
-  // Check if we arrived here while indexing was still in progress
-  const indexingParam = searchParams.get('indexing') === 'true';
-  const kbIdParam = searchParams.get('kbId');
-
-  const [agent, setAgent] = useState<StoredAgent | null>(null);
-  const [messages, setMessages] = useState<ChatMessageType[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [agent, setAgent] = useState<PublicAgent | null>(null);
+  const [status, setStatus] = useState<AgentStatus | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [retiredMessage, setRetiredMessage] = useState<string | null>(null);
   const [isFetchingAgent, setIsFetchingAgent] = useState(true);
-  const [streamingContent, setStreamingContent] = useState('');
-  const [showIndexingBanner, setShowIndexingBanner] = useState(indexingParam);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [showIndexingBanner, setShowIndexingBanner] = useState(true);
 
-  // Fetch agent data, reuse accessKey from localStorage if available
+  const { messages, sendText, clearMessages, isLoading, streamingContent, messagesEndRef } = useChat({
+    apiUrl: '/api/chat',
+    agentId,
+    surface: 'site',
+  });
+
+  // A Sammy that no longer exists: show the retired state and forget it in this browser.
+  const retire = useCallback(
+    (body: unknown) => {
+      localStorage.removeItem(`sharkbyte-agent-${agentId}`);
+      setRetiredMessage(errorText(body) ?? RETIRED_FALLBACK);
+    },
+    [agentId],
+  );
+
+  // Load the agent's public details
   useEffect(() => {
     async function loadAgent() {
       try {
-        // Check localStorage for existing accessKey first
-        const storedData = localStorage.getItem(`sharkbyte-agent-${agentId}`);
-        const storedAgent = storedData ? JSON.parse(storedData) : null;
-        const existingKey = storedAgent?.accessKey;
-
-        // Fetch agent data (only request new key if we don't have one stored)
-        const needsNewKey = !existingKey;
-        const agentRes = await fetch(
-          `/api/agents/${agentId}${needsNewKey ? '?includeAccessKey=true&forceNewKey=true' : ''}`
-        );
-        const agentData = await agentRes.json();
-
-        if (agentData.success && agentData.agent) {
-          const agent = agentData.agent;
-          // Use existing key or new key from API
-          const keyToUse = existingKey || agentData.accessKey || '';
-
-          const fetchedAgent: StoredAgent = {
-            id: agent.uuid,
-            name: agent.name,
-            kbId: agent.knowledgeBases?.[0]?.uuid || '',
-            url: `https://${agent.domain}`,
-            endpoint: agent.endpoint,
-            accessKey: keyToUse,
-            createdAt: agent.createdAt,
-          };
-
-          // Update localStorage with fresh data (including new key if created)
-          localStorage.setItem(
-            `sharkbyte-agent-${agentId}`,
-            JSON.stringify(fetchedAgent)
-          );
-
-          setAgent(fetchedAgent);
+        const res = await fetch(`/api/agents/${agentId}`);
+        const body: unknown = await res.json();
+        if (res.status === 404) {
+          retire(body);
+        } else if (res.ok) {
+          const { agent: loaded } = body as GetAgentResponse;
+          setAgent(loaded);
+          setStatus(loaded.status);
+          setStatusError(loaded.lastError);
         } else {
-          // Agent not found - clear stale localStorage and redirect
-          localStorage.removeItem(`sharkbyte-agent-${agentId}`);
-          router.push(`/agents/${agentId}`);
+          throw new Error(errorText(body) ?? `Agent request failed (${res.status})`);
         }
       } catch (error) {
         console.error('Failed to fetch agent:', error);
-        localStorage.removeItem(`sharkbyte-agent-${agentId}`);
         router.push('/');
       } finally {
         setIsFetchingAgent(false);
@@ -86,151 +77,59 @@ export default function ChatPage() {
     }
 
     loadAgent();
-  }, [agentId, router]);
+  }, [agentId, router, retire]);
 
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, messagesEndRef]);
 
-  // Poll for indexing status to auto-dismiss banner and reload agent when ready
+  // While Sammy is still reading the site, poll its status until it is ready (or fails)
   useEffect(() => {
-    // Only poll if agent doesn't have endpoint yet, or if showing indexing banner
-    const needsPolling = (agent && !agent.endpoint) || showIndexingBanner;
-    if (!needsPolling || !kbIdParam) return;
+    if (status !== 'crawling') return;
 
     const checkStatus = async () => {
       try {
-        const res = await fetch(
-          `/api/agent-status?agentId=${agentId}&kbId=${kbIdParam}`
-        );
-        const data = await res.json();
-        if (data.status === 'ready') {
-          setShowIndexingBanner(false);
-          // Reload agent to get endpoint if we don't have it yet
-          if (!agent?.endpoint) {
-            // Check localStorage for existing key - don't create new one
-            const storedData = localStorage.getItem(`sharkbyte-agent-${agentId}`);
-            const storedAgent = storedData ? JSON.parse(storedData) : null;
-            const existingKey = storedAgent?.accessKey || agent?.accessKey;
-            const needsNewKey = !existingKey;
-
-            const agentRes = await fetch(
-              `/api/agents/${agentId}${needsNewKey ? '?includeAccessKey=true&forceNewKey=true' : ''}`
-            );
-            const agentData = await agentRes.json();
-            if (agentData.success && agentData.agent) {
-              const keyToUse = existingKey || agentData.accessKey || '';
-              const fetchedAgent: StoredAgent = {
-                id: agentData.agent.uuid,
-                name: agentData.agent.name,
-                kbId: agentData.agent.knowledgeBases?.[0]?.uuid || '',
-                url: `https://${agentData.agent.domain}`,
-                endpoint: agentData.agent.endpoint,
-                accessKey: keyToUse,
-                createdAt: agentData.agent.createdAt,
-              };
-              // Store in localStorage if we created a new key
-              if (agentData.accessKey && needsNewKey) {
-                localStorage.setItem(`sharkbyte-agent-${agentId}`, JSON.stringify(fetchedAgent));
-              }
-              setAgent(fetchedAgent);
-            }
-          }
+        const res = await fetch(`/api/agent-status?agentId=${encodeURIComponent(agentId)}`);
+        const body: unknown = await res.json();
+        if (res.status === 404) {
+          retire(body);
+          setStatus(null);
+          return;
+        }
+        if (!res.ok) return;
+        const next = body as AgentStatusResponse;
+        if (next.status !== 'crawling') {
+          setStatus(next.status);
+          setStatusError(next.error ?? null);
         }
       } catch (err) {
         console.error('Status check error:', err);
       }
     };
 
-    // Check immediately, then every 5 seconds
     checkStatus();
-    const interval = setInterval(checkStatus, 5000);
+    const interval = setInterval(checkStatus, STATUS_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [showIndexingBanner, agentId, kbIdParam, agent]);
+  }, [status, agentId, retire]);
 
-  // Check if agent is ready for chat (has endpoint)
-  const isAgentReady = Boolean(agent?.endpoint);
+  const isAgentReady = status === 'ready';
 
-  const sendMessage = async (content: string) => {
-    if (!agent) return;
-
-    // Prevent sending if agent doesn't have an endpoint yet
-    if (!agent.endpoint) {
-      console.error('Cannot send message: Agent endpoint not available yet');
-      return;
-    }
-
-    const userMessage: ChatMessageType = { role: 'user', content };
-    setMessages((prev) => [...prev, userMessage]);
-    setIsLoading(true);
-    setStreamingContent('');
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [...messages, userMessage],
-          endpoint: agent.endpoint,
-          accessKey: agent.accessKey,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Chat request failed');
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-      let accumulated = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('0:')) {
-            try {
-              const data = JSON.parse(line.slice(2));
-              if (data.textDelta) {
-                accumulated += data.textDelta;
-                setStreamingContent(accumulated);
-              }
-            } catch {
-              // Ignore parse errors for incomplete JSON
-            }
-          }
-        }
-      }
-
-      // Add final assistant message
-      const assistantMessage: ChatMessageType = {
-        role: 'assistant',
-        content: accumulated,
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-      setStreamingContent('');
-    } catch (error) {
-      console.error('Chat error:', error);
-      const errorMessage: ChatMessageType = {
-        role: 'assistant',
-        content: "I'm sorry, I encountered an error. Please try again.",
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-    }
+  const sendMessage = (content: string) => {
+    if (isAgentReady) sendText(content);
   };
 
-  const clearChat = () => {
-    setMessages([]);
-  };
+  if (retiredMessage) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="text-center max-w-md">
+          <SammyAvatar size="xl" className="mx-auto mb-4" />
+          <p className="text-foreground mb-4">{retiredMessage}</p>
+          <Button onClick={() => router.push('/')}>Make a new Sammy</Button>
+        </div>
+      </div>
+    );
+  }
 
   if (isFetchingAgent || !agent) {
     return (
@@ -273,7 +172,7 @@ export default function ChatPage() {
                 className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1"
               >
                 <span className="truncate max-w-[130px] sm:max-w-none">
-                  {new URL(agent.url).hostname}
+                  {agent.domain}
                 </span>
                 <ExternalLink className="w-3 h-3 flex-shrink-0" />
               </a>
@@ -287,7 +186,7 @@ export default function ChatPage() {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={clearChat}
+                onClick={clearMessages}
                 title="Clear chat"
                 className="rounded-full"
               >
@@ -311,7 +210,7 @@ export default function ChatPage() {
               <MobileMenuItem
                 icon={<Trash2 className="w-5 h-5" />}
                 label="Clear Chat"
-                onClick={clearChat}
+                onClick={clearMessages}
               />
               <MobileMenuItem
                 icon={<Settings className="w-5 h-5" />}
@@ -328,8 +227,8 @@ export default function ChatPage() {
         </div>
       </header>
 
-      {/* Indexing Status Banner */}
-      {showIndexingBanner && (
+      {/* Crawling Status Banner */}
+      {status === 'crawling' && showIndexingBanner && (
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -340,7 +239,7 @@ export default function ChatPage() {
             <div className="flex items-center gap-3">
               <Loader2 className="w-4 h-4 text-[var(--do-blue)] animate-spin" />
               <span className="text-sm text-foreground">
-                Sammy is still learning about this website. Responses may improve shortly.
+                Sammy is still learning about this website. Chat opens as soon as the dive is done.
               </span>
             </div>
             <Button
@@ -371,7 +270,7 @@ export default function ChatPage() {
               <p className="text-sm sm:text-base text-muted-foreground text-center max-w-md mb-4 sm:mb-6">
                 I&apos;m your AI support agent for{' '}
                 <span className="text-primary font-medium">
-                  {new URL(agent.url).hostname}
+                  {agent.domain}
                 </span>
                 . Ask me anything about this website!
               </p>
@@ -385,7 +284,8 @@ export default function ChatPage() {
                   <button
                     key={suggestion}
                     onClick={() => sendMessage(suggestion)}
-                    className="p-2.5 sm:p-3 min-h-[44px] text-left text-sm rounded-lg border border-border bg-card hover:bg-accent active:bg-accent transition-colors"
+                    disabled={!isAgentReady}
+                    className="p-2.5 sm:p-3 min-h-[44px] text-left text-sm rounded-lg border border-border bg-card hover:bg-accent active:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {suggestion}
                   </button>
@@ -394,8 +294,8 @@ export default function ChatPage() {
             </motion.div>
           ) : (
             <div className="py-4">
-              {messages.map((message, i) => (
-                <ChatMessage key={i} message={message} />
+              {messages.map((message) => (
+                <ChatMessage key={message.id} message={message} />
               ))}
               {streamingContent && (
                 <ChatMessage
@@ -415,10 +315,19 @@ export default function ChatPage() {
         <ChatInput onSend={sendMessage} isLoading={isLoading} />
       ) : (
         <div className="p-4 bg-card border-t border-border">
-          <div className="flex items-center justify-center gap-2 text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Agent is still deploying... Chat will be available shortly.</span>
-          </div>
+          {status === 'failed' ? (
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-2 text-muted-foreground text-center">
+              <span>{statusError ?? "This Sammy couldn't read the site."}</span>
+              <Link href={`/agents/${agentId}`} className="text-primary hover:underline">
+                Open settings to repair it
+              </Link>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Sammy is still reading the site... Chat will be available shortly.</span>
+            </div>
+          )}
         </div>
       )}
 

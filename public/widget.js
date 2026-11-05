@@ -8,6 +8,8 @@
     return;
   }
 
+  // Old snippets also carry data-endpoint and data-access-key. They are read so those
+  // snippets keep working, and never used: agents are public by id.
   var config = {
     agentId: script.getAttribute('data-agent-id'),
     endpoint: script.getAttribute('data-endpoint'),
@@ -22,15 +24,9 @@
     console.error('SharkByte Widget: data-agent-id is required');
     return;
   }
-  if (!config.endpoint || !config.accessKey) {
-    console.error('SharkByte Widget: data-endpoint and data-access-key are required');
-    return;
-  }
 
-  // Base URL for the widget (use localhost for development)
-  var baseUrl = script.src.includes('localhost')
-    ? 'http://localhost:3000'
-    : 'https://sharkbyte-support.vercel.app';
+  // The widget is served from wherever this script came from (production, a preview, localhost)
+  var baseUrl = new URL(script.src).origin;
 
   // Create container
   var container = document.createElement('div');
@@ -48,8 +44,6 @@
   // Create iframe
   var iframe = document.createElement('iframe');
   var params = new URLSearchParams({
-    endpoint: config.endpoint,
-    accessKey: config.accessKey,
     color: config.primaryColor,
     position: config.position,
   });

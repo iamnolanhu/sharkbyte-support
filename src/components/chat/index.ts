@@ -19,6 +19,10 @@ export {
   type ChatMessage,
   type UseChatOptions,
   type UseChatReturn,
+  LOCAL_ERROR_PREFIX,
+  buildChatRequestBody,
+  chatErrorCopy,
+  toChatMessages,
   useChat,
 } from './chat-core';
 
