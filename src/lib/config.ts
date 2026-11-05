@@ -139,6 +139,57 @@ export function getLimits(env: EnvVars = process.env): Limits {
   };
 }
 
+// LLM provider chain: free OpenAI-compatible providers, tried in order
+export type ProviderName = 'cerebras' | 'openrouter' | 'nvidia';
+
+export const DEFAULT_PROVIDERS: readonly ProviderName[] = ['cerebras', 'openrouter', 'nvidia'];
+
+function isProviderName(value: string): value is ProviderName {
+  return (DEFAULT_PROVIDERS as readonly string[]).includes(value);
+}
+
+/** Parses `LLM_PROVIDERS`: trims, lowercases, drops unknown names and repeats; nothing left → the default order. */
+export function parseProviderList(csv: string | undefined): ProviderName[] {
+  const names: ProviderName[] = [];
+  for (const raw of (csv ?? '').split(',')) {
+    const name = raw.trim().toLowerCase();
+    if (isProviderName(name) && !names.includes(name)) names.push(name);
+  }
+  return names.length > 0 ? names : [...DEFAULT_PROVIDERS];
+}
+
+export interface LlmEnv {
+  providers: ProviderName[];
+  firstByteTimeoutMs: number;
+  cerebrasKey?: string;
+  openrouterKey?: string;
+  nvidiaKey?: string;
+  cerebrasModel: string;
+  openrouterModel: string;
+  nvidiaModel: string;
+}
+
+/** A free OpenRouter model that is instruction-tuned and over 20B parameters. */
+export const DEFAULT_OPENROUTER_MODEL = 'google/gemma-4-31b-it:free';
+
+function envText(env: EnvVars, name: string): string | undefined {
+  const value = env[name]?.trim();
+  return value ? value : undefined;
+}
+
+export function getLlmEnv(env: EnvVars = process.env): LlmEnv {
+  return {
+    providers: parseProviderList(env.LLM_PROVIDERS),
+    firstByteTimeoutMs: envInt(env, 'LLM_FIRST_BYTE_TIMEOUT_MS', 8000),
+    cerebrasKey: envText(env, 'CEREBRAS_API_KEY'),
+    openrouterKey: envText(env, 'OPENROUTER_API_KEY'),
+    nvidiaKey: envText(env, 'NVIDIA_API_KEY'),
+    cerebrasModel: envText(env, 'LLM_MODEL') ?? 'gpt-oss-120b',
+    openrouterModel: envText(env, 'OPENROUTER_MODEL') ?? DEFAULT_OPENROUTER_MODEL,
+    nvidiaModel: envText(env, 'NVIDIA_LLM_MODEL') ?? 'openai/gpt-oss-120b',
+  };
+}
+
 // Demo Agent Configuration (uses APP_DOMAIN)
 export const DEMO_AGENT_CONFIG = {
   get URL() { return `https://${APP_DOMAIN}`; },

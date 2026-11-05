@@ -15,11 +15,13 @@
     "init": "npx tsx scripts/init-deployment.ts"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^2.0.86",
+    "@ai-sdk/openai-compatible": "^3",
+    "@ai-sdk/provider": "^4",
+    "@ai-sdk/react": "^4",
     "@neondatabase/serverless": "^1.2.0",
     "@radix-ui/react-slot": "^1.1.1",
     "@vercel/analytics": "^1.6.1",
-    "ai": "^4.1.0",
+    "ai": "^7",
     "cheerio": "^1.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
