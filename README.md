@@ -53,17 +53,24 @@ SharkByte instantly creates an AI chatbot that can answer questions about any we
 <p align="center">
   <img src="./public/images/SharkByte-Agent-Chat.png" alt="Chat Interface" width="600" />
 </p>
-<p align="center"><em>AI chat powered by DigitalOcean Gradient</em></p>
+<p align="center"><em>Chat with Sammy about any site</em></p>
 
 ---
 
 ## Tech Stack
 
-- **Framework**: Next.js 16.0 (App Router + Turbopack)
-- **UI Library**: React 19.2
-- **Styling**: Tailwind CSS v4 + shadcn/ui
-- **AI**: DigitalOcean Gradient AI
-- **Deployment**: Vercel
+- **Framework**: Next.js 16 (App Router + Turbopack), React 19, Tailwind CSS v4 + shadcn/ui
+- **Database**: Postgres with pgvector (Neon)
+- **Embeddings**: NVIDIA Build (`nvidia/nemotron-3.5-embed-1b`)
+- **Chat**: a free LLM chain (Cerebras → OpenRouter → NVIDIA) streamed with AI SDK 7
+- **Crawling**: built-in sitemap/HTML crawler, Firecrawl for JavaScript-rendered pages (optional)
+- **Analytics**: PostHog (optional)
+- **Hosting**: Vercel
+
+**Cost: $0 on free tiers.** Built-in rails (pages per agent, crawls and chat tokens per day,
+total storage) keep a public demo inside the free quotas; see [DEPLOYMENT.md](DEPLOYMENT.md).
+
+Originally built on DigitalOcean Gradient AI for the MLH × DigitalOcean hackathon.
 
 ---
 
@@ -71,9 +78,9 @@ SharkByte instantly creates an AI chatbot that can answer questions about any we
 
 ### Prerequisites
 
-- Node.js 18+
-- npm or yarn
-- DigitalOcean account with Gradient AI enabled
+- [Bun](https://bun.sh)
+- A Postgres database with the `vector` extension (a free [Neon](https://neon.tech) project works)
+- An [NVIDIA Build](https://build.nvidia.com) API key (free)
 
 ### Installation
 
@@ -83,38 +90,34 @@ git clone https://github.com/iamnolanhu/sharkbyte-support.git
 cd sharkbyte-support
 
 # Install dependencies
-npm install
+bun install
 
 # Set up environment variables
 cp .env.example .env.local
-# Edit .env.local with your DigitalOcean API token
+# Edit .env.local: DATABASE_URL and NVIDIA_API_KEY at minimum
 
 # Run development server
-npm run dev
+bun run dev
 ```
+
+The database schema creates itself on the first request.
 
 ### Environment Variables
 
-Create a `.env.local` file:
+`.env.example` lists every variable with a one-line comment. The short version:
 
 ```env
 # Required
-DO_API_TOKEN=your_digitalocean_api_token      # https://cloud.digitalocean.com/account/api/tokens
+DATABASE_URL=postgres://...        # Postgres with pgvector
+NVIDIA_API_KEY=                    # Embeddings, and the last LLM in the chain
 
-# DigitalOcean Gradient AI
-DO_REGION=tor1                                 # Only tor1 supports gen-ai agents
-DO_EMBEDDING_MODEL_UUID=bb3ab4ee-d9b5-11f0-b074-4e013e2ddde4  # Qwen3 (default)
-DO_LLM_MODEL_UUID=18bc9b8f-73c5-11f0-b074-4e013e2ddde4        # GPT-oss-120b (default)
-
-# Optional (auto-discovered if not set)
-DO_PROJECT_ID=your_project_id                 # Auto-creates "SharkByte Support" project if not set
-DO_DATABASE_ID=your_database_id               # Reuse existing vector database
-DO_MODEL_ACCESS_KEY_ID=your_key_id            # Prevents duplicate key creation
-FIRECRAWL_API_KEY=your_firecrawl_api_key      # Fallback for SPAs (https://firecrawl.dev)
-
-# Optional - Demo chat widget on landing page
-NEXT_PUBLIC_DEMO_AGENT_ENDPOINT=https://your-demo-agent.agents.do-ai.run
-NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY=your_demo_access_key
+# Optional
+CEREBRAS_API_KEY=                  # Fastest free LLM, first in the chain
+OPENROUTER_API_KEY=                # Free OpenRouter models
+FIRECRAWL_API_KEY=                 # JavaScript-rendered pages (capped free key)
+CRON_SECRET=                       # Protects the daily storage sweep
+NEXT_PUBLIC_POSTHOG_KEY=           # Browser analytics (the only public key)
+POSTHOG_API_KEY=                   # Server analytics
 ```
 
 ---
@@ -136,8 +139,6 @@ Add the chat widget to any website with a single script tag:
 <script
   src="https://sharkbyte-support.vercel.app/widget.js"
   data-agent-id="your-agent-id"
-  data-endpoint="https://your-agent.agents.do-ai.run"
-  data-access-key="your-access-key"
   data-primary-color="#0080FF"
   data-position="bottom-right"
   async
@@ -153,27 +154,18 @@ Add the chat widget to any website with a single script tag:
 
 ## Deployment
 
-> **Cost Notice:** Running SharkByte requires a DigitalOcean account with Gradient AI enabled. Estimated costs: ~$20/month for the vector database + variable AI usage. [Get $200 in free credits](https://www.digitalocean.com/?refcode=732d9583cca9) to get started.
-
-> **First-Time Setup:** Fresh DO accounts must [create one agent manually](https://cloud.digitalocean.com/gen-ai/agents/new) before API-based creation works.
-
 Deploy to Vercel with one click:
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/iamnolanhu/sharkbyte-support)
 
-Then add `DO_API_TOKEN` to your environment variables.
+Then:
 
-**See [DEPLOYMENT.md](DEPLOYMENT.md) for the complete deployment guide**, including:
-- Step-by-step setup instructions
-- Post-deployment optimization (prevent duplicate resources)
-- Troubleshooting common issues
+1. Add **Neon** from the Vercel Marketplace (Storage tab); it sets `DATABASE_URL` for you.
+2. Add `NVIDIA_API_KEY`, plus one more LLM key if you want a faster chain (`CEREBRAS_API_KEY` or `OPENROUTER_API_KEY`).
+3. Optionally add `CRON_SECRET`, `FIRECRAWL_API_KEY` and the PostHog keys.
+4. Redeploy. The schema creates itself on the first request.
 
-Or deploy manually:
-
-```bash
-npm run build
-vercel deploy --prod
-```
+**See [DEPLOYMENT.md](DEPLOYMENT.md) for the complete deployment guide**: every variable, the free-tier rails and their knobs, the daily sweep, and troubleshooting.
 
 ---
 
@@ -185,11 +177,10 @@ sharkbyte-support/
 │   ├── images/       # Screenshots & hackathon photos
 │   ├── sammy/        # Sammy mascot assets
 │   └── widget.js     # Embeddable chat widget
-├── scripts/          # Dev utilities (cleanup, create-agent)
 ├── src/
 │   ├── app/          # Next.js pages & API routes
 │   ├── components/   # React components
-│   ├── lib/          # DigitalOcean client, config, utils
+│   ├── lib/          # Database, crawler, embeddings, LLM chain, rails, config
 │   ├── styles/       # Theme system
 │   └── types/        # TypeScript interfaces
 └── [config files]    # package.json, tsconfig, etc.
@@ -215,12 +206,14 @@ sharkbyte-support/
 
 ## Built With
 
-- [DigitalOcean Gradient AI](https://docs.digitalocean.com/products/gradient-ai-platform/)
 - [Next.js](https://nextjs.org/)
 - [Tailwind CSS](https://tailwindcss.com/)
 - [shadcn/ui](https://ui.shadcn.com/)
 - [Framer Motion](https://www.framer.com/motion/)
-- [Vercel AI SDK](https://sdk.vercel.ai/)
+- [Vercel AI SDK](https://ai-sdk.dev/)
+- [Neon](https://neon.tech/) + [pgvector](https://github.com/pgvector/pgvector)
+- [NVIDIA Build](https://build.nvidia.com/), [Cerebras](https://cloud.cerebras.ai/) and [OpenRouter](https://openrouter.ai/)
+- [PostHog](https://posthog.com/)
 
 ---
 

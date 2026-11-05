@@ -39,6 +39,7 @@ export function AgentHistory() {
 
   // This browser's own list; no network call. Re-read each time the dropdown opens.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is browser-only, so it is read after mount
     setAgents(listStoredAgents(localStorage));
   }, [isOpen]);
 

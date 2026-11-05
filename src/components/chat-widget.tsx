@@ -67,6 +67,7 @@ export function ChatWidget({
 
   // Prevent hydration mismatch
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flips once after hydration by design
     setMounted(true);
   }, []);
 
@@ -95,12 +96,14 @@ export function ChatWidget({
   const themeColors = getTailwindThemeClasses(theme as 'light' | 'dark' | 'ocean', mounted);
   const accentColor = getAccentColor(theme as 'light' | 'dark' | 'ocean', primaryColor);
 
-  const ThemeIcon = () => {
-    if (!mounted) return <Sun className="w-4 h-4 text-white" />;
-    if (theme === 'light') return <Sun className="w-4 h-4 text-white" />;
-    if (theme === 'dark') return <Moon className="w-4 h-4 text-white" />;
-    return <Waves className="w-4 h-4 text-white" />;
-  };
+  const themeIcon =
+    !mounted || theme === 'light' ? (
+      <Sun className="w-4 h-4 text-white" />
+    ) : theme === 'dark' ? (
+      <Moon className="w-4 h-4 text-white" />
+    ) : (
+      <Waves className="w-4 h-4 text-white" />
+    );
 
   return (
     <div className={`fixed ${isMaximized ? 'inset-0' : `bottom-4 sm:bottom-6 ${positionClasses}`} z-50`}>
@@ -143,7 +146,7 @@ export function ChatWidget({
                   className="p-2 rounded-full hover:bg-white/20 transition-colors"
                   aria-label="Toggle theme"
                 >
-                  <ThemeIcon />
+                  {themeIcon}
                 </button>
                 <button
                   onClick={() => setIsMaximized(!isMaximized)}

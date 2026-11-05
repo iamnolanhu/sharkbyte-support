@@ -84,6 +84,7 @@ export function EmbedChatWidget({
   // Detect system preference on mount
   useEffect(() => {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- matchMedia is browser-only, so it is read after mount
     setTheme(prefersDark ? 'dark' : 'light');
 
     // Listen for system preference changes
@@ -137,11 +138,7 @@ export function EmbedChatWidget({
   const isOcean = theme === 'ocean';
 
   // Theme icon selector using shared icons
-  const ThemeIcon = () => {
-    if (theme === 'light') return <SunIcon />;
-    if (theme === 'dark') return <MoonIcon />;
-    return <WavesIcon />;
-  };
+  const themeIcon = theme === 'light' ? <SunIcon /> : theme === 'dark' ? <MoonIcon /> : <WavesIcon />;
 
   return (
     <>
@@ -235,7 +232,7 @@ export function EmbedChatWidget({
                 onMouseOut={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                 title={`Current: ${theme}. Click to switch.`}
               >
-                <ThemeIcon />
+                {themeIcon}
               </button>
               <button
                 onClick={() => setIsMaximized(!isMaximized)}
