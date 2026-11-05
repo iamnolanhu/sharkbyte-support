@@ -17,6 +17,8 @@ export interface FallbackOptions {
   onFallback: (from: ProviderName, to: ProviderName, reason: FallbackReason) => void;
   /** An error after text was sent: the stream ends there, no fallback. */
   onStreamError: (provider: ProviderName, error: unknown) => void;
+  /** The chain entry that is answering (called once per call, when it starts streaming or generates). */
+  onProvider?: (provider: ProviderName, modelId: string) => void;
 }
 
 type StreamReader = ReadableStreamDefaultReader<LanguageModelV4StreamPart>;
@@ -132,6 +134,7 @@ async function attemptStream(
       buffered.push(next.value);
       if (next.value.type === 'text-delta') {
         budget.stop();
+        opts.onProvider?.(name, model.modelId);
         return { ok: true, value: { ...result, stream: continueStream(name, buffered, reader, opts.onStreamError) } };
       }
     }
@@ -157,6 +160,7 @@ async function attemptGenerate(
   const budget = startBudget(name, opts.firstByteTimeoutMs, options.abortSignal);
   try {
     const value = await Promise.race([model.doGenerate({ ...options, abortSignal: budget.signal }), budget.expired]);
+    opts.onProvider?.(name, model.modelId);
     return { ok: true, value };
   } catch (error) {
     budget.abort();

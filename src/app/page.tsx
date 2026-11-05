@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Header } from '@/components/header';
@@ -41,6 +41,7 @@ export default function Home() {
   const [error, setError] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>(''); // Dynamic status from API
   const [isSubmitting, setIsSubmitting] = useState(false); // Prevents double-submit
+  const submittedAt = useRef(0); // Date.now() at submit, for the outcome events' `seconds`
 
   // Poll the crawl until the agent is ready or fails
   useEffect(() => {
@@ -69,12 +70,17 @@ export default function Home() {
         const status = data as Partial<AgentStatusResponse>;
         if (status.message) setStatusMessage(status.message);
 
+        const outcome = {
+          pages: status.pagesCrawled ?? 0,
+          chunks: status.chunkCount ?? 0,
+          seconds: Math.round((Date.now() - submittedAt.current) / 1000),
+        };
         if (status.status === 'ready') {
-          track('agent_ready');
+          track('agent_ready', outcome);
           setStep('ready');
           router.push(`/agents/${agentId}`);
         } else if (status.status === 'failed') {
-          track('agent_failed');
+          track('agent_failed', { ...outcome, lastError: status.error ?? '' });
           setStep('error');
           setError(status.error || 'Sammy could not read that site. Try another one.');
           setIsSubmitting(false);
@@ -94,7 +100,8 @@ export default function Home() {
     setIsSubmitting(true);
     setStep('creating');
     setError('');
-    track('agent_create_submitted');
+    submittedAt.current = Date.now();
+    track('agent_create_submitted', { url });
 
     try {
       const res = await fetch('/api/create-agent', {

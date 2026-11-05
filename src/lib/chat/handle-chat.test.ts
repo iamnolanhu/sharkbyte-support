@@ -346,6 +346,163 @@ describe('handleChat', () => {
   });
 });
 
+function completedEvents(): Record<string, unknown>[] {
+  return vi
+    .mocked(captureServer)
+    .mock.calls.filter(([event]) => event === 'chat_completed')
+    .map(([, props]) => props);
+}
+
+function completedDistinctIds(): unknown[] {
+  return vi
+    .mocked(captureServer)
+    .mock.calls.filter(([event]) => event === 'chat_completed')
+    .map(([, , distinctId]) => distinctId);
+}
+
+describe('chat_completed analytics', () => {
+  const SITE_META = { surface: 'site' as const, userAgent: 'TestAgent/1.0', origin: null, referer: null };
+
+  it('a successful turn captures chat_completed once with a hashed visitor id', async () => {
+    const agent = await makeAgent('reef.example');
+    await insertChunksWithinCeiling(
+      db,
+      agent.id,
+      [{ url: CHUNK_URL, title: 'Fins', pos: 0, content: 'Sharks have fins.', embedding: fakeEmbedding(1) }],
+      LIMITS.maxTotalChunks,
+    );
+    const good = new MockLanguageModelV4({
+      modelId: 'llama-test',
+      doStream: async () => ({ stream: streamOf(answerParts('Sharks love docs')) }),
+    });
+    vi.mocked(buildChain).mockReturnValue([
+      { name: 'cerebras', model: null },
+      { name: 'openrouter', model: good },
+    ]);
+
+    const res = await handleChat({
+      agentId: agent.id,
+      raw: body([userMessage('Do sharks have fins?')]),
+      ip: IP,
+      meta: SITE_META,
+    });
+    await res.text();
+
+    const events = completedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      agentId: agent.id,
+      domain: 'reef.example',
+      chat_surface: 'site',
+      question: 'Do sharks have fins?',
+      answer: 'Sharks love docs',
+      provider: 'openrouter',
+      model: 'llama-test',
+      promptTokens: 30,
+      completionTokens: 12,
+      retrievedChunks: 1,
+      fallbackCount: 1,
+      outcome: 'ok',
+      host_domain: null,
+    });
+    expect(typeof events[0]?.latencyMs).toBe('number');
+    const [distinctId] = completedDistinctIds();
+    expect(distinctId).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(vi.mocked(captureServer).mock.calls)).not.toContain(IP);
+  });
+
+  it('a chat_ip 429 captures outcome rate_limited with the question and no answer', async () => {
+    const agent = await makeAgent('reef.example');
+    for (let i = 0; i < LIMITS.chatMessagesPerIpPerMinute; i++) await checkRail(db, 'chat_ip', { ip: IP }, NOW, LIMITS);
+    const res = await handleChat({ agentId: agent.id, raw: body([userMessage('hi there')]), ip: IP, meta: SITE_META });
+    expect(res.status).toBe(429);
+    const events = completedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ outcome: 'rate_limited', question: 'hi there', answer: null, provider: null });
+    expect(captureServer).toHaveBeenCalledWith('rate_limited', { rail: 'chat_ip' });
+  });
+
+  it('a stream error after text captures provider_error with the partial answer', async () => {
+    const agent = await makeAgent('reef.example');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    useModel([
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 't' },
+      { type: 'text-delta', id: 't', delta: 'Sharks lo' },
+      { type: 'error', error: new Error('connection reset') },
+    ]);
+    const res = await handleChat({ agentId: agent.id, raw: body([userMessage('hi')]), ip: IP, meta: SITE_META });
+    await res.text();
+    errorSpy.mockRestore();
+    const events = completedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ outcome: 'provider_error', answer: 'Sharks lo', provider: 'cerebras' });
+  });
+
+  it('every provider down captures provider_error with no answer', async () => {
+    const agent = await makeAgent('reef.example');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(buildChain).mockReturnValue([{ name: 'cerebras', model: null }]);
+    const res = await handleChat({ agentId: agent.id, raw: body([userMessage('hi')]), ip: IP, meta: SITE_META });
+    await res.text();
+    errorSpy.mockRestore();
+    const events = completedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ outcome: 'provider_error', answer: null, provider: null });
+  });
+
+  it('caps a 5,000 character answer at 4,000', async () => {
+    const agent = await makeAgent('reef.example');
+    useModel(answerParts('a'.repeat(5000)));
+    const res = await handleChat({ agentId: agent.id, raw: body([userMessage('hi')]), ip: IP, meta: SITE_META });
+    await res.text();
+    const answer = completedEvents()[0]?.answer;
+    expect(typeof answer === 'string' && answer.length).toBe(4000);
+  });
+
+  it('the widget route sets chat_surface embed and host_domain from Origin', async () => {
+    const agent = await makeAgent('reef.example');
+    useModel(answerParts('Widget fins'));
+    const res = await widgetPost(
+      new Request('http://localhost/api/widget/x', {
+        method: 'POST',
+        headers: { origin: 'https://shop.customer.example', 'user-agent': 'Mozilla/5.0' },
+        body: body([userMessage('hi')]),
+      }),
+      { params: Promise.resolve({ agentId: agent.id }) },
+    );
+    await res.text();
+    expect(completedEvents()[0]).toMatchObject({ chat_surface: 'embed', host_domain: 'shop.customer.example' });
+  });
+
+  it('host_domain falls back to the Referer hostname, and the site route is not embed', async () => {
+    const agent = await makeAgent('reef.example');
+    useModel(answerParts('Widget fins'));
+    const res = await widgetPost(
+      new Request('http://localhost/api/widget/x', {
+        method: 'POST',
+        headers: { referer: 'https://blog.customer.example/post/1?x=1' },
+        body: body([userMessage('hi')]),
+      }),
+      { params: Promise.resolve({ agentId: agent.id }) },
+    );
+    await res.text();
+    expect(completedEvents()[0]).toMatchObject({ host_domain: 'blog.customer.example' });
+
+    vi.mocked(captureServer).mockClear();
+    useModel(answerParts('Site fins'));
+    const site = await chatPost(
+      new Request('http://localhost/api/chat', {
+        method: 'POST',
+        headers: { origin: 'https://sharkbyte.example' },
+        body: JSON.stringify({ agentId: agent.id, messages: [userMessage('hi')] }),
+      }),
+    );
+    await site.text();
+    expect(completedEvents()[0]).toMatchObject({ chat_surface: 'site', host_domain: null });
+  });
+});
+
 describe('chat routes', () => {
   it('widget route answers CORS preflight', async () => {
     const res = await widgetOptions();

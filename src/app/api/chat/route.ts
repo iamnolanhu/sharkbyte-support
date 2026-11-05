@@ -1,3 +1,4 @@
+import { chatRequestMeta } from '@/lib/chat/chat-event';
 import { handleChat } from '@/lib/chat/handle-chat';
 import { getLimits } from '@/lib/config';
 import { getClientIp } from '@/lib/rails';
@@ -21,5 +22,10 @@ function readAgentId(raw: string): string {
 /** POST /api/chat { agentId, messages }: the site's own chat, streamed as a UI message stream. */
 export async function POST(request: Request) {
   const raw = await request.text();
-  return handleChat({ agentId: readAgentId(raw), raw, ip: getClientIp(request.headers) });
+  return handleChat({
+    agentId: readAgentId(raw),
+    raw,
+    ip: getClientIp(request.headers),
+    meta: chatRequestMeta(request.headers, 'site'),
+  });
 }

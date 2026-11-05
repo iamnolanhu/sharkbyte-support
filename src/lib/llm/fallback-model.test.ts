@@ -74,6 +74,36 @@ function textOf(parts: LanguageModelV4StreamPart[]): string {
   return parts.map((p) => (p.type === 'text-delta' ? p.delta : '')).join('');
 }
 
+describe('createFallbackModel onProvider', () => {
+  it('reports the provider and model id that answered, after a fallback', async () => {
+    const onProvider = vi.fn<(provider: ProviderName, modelId: string) => void>();
+    const good = new MockLanguageModelV4({
+      modelId: 'backup-model',
+      doStream: async () => ({ stream: streamOf(textParts('Hi')) }),
+    });
+    const model = createFallbackModel([entry('cerebras', null), entry('openrouter', good)], {
+      firstByteTimeoutMs: 1000,
+      onFallback: vi.fn(),
+      onStreamError: vi.fn(),
+      onProvider,
+    });
+    await streamParts(model);
+    expect(onProvider.mock.calls).toEqual([['openrouter', 'backup-model']]);
+  });
+
+  it('is not called when no provider answers', async () => {
+    const onProvider = vi.fn();
+    const model = createFallbackModel([entry('cerebras', null)], {
+      firstByteTimeoutMs: 1000,
+      onFallback: vi.fn(),
+      onStreamError: vi.fn(),
+      onProvider,
+    });
+    await expect(streamParts(model)).rejects.toThrow();
+    expect(onProvider).not.toHaveBeenCalled();
+  });
+});
+
 describe('createFallbackModel', () => {
   it('reports the chain as its provider and model id', () => {
     const { model } = setup([entry('cerebras', null), entry('nvidia', okModel('x'))]);

@@ -9,6 +9,12 @@ import { estimateTokens } from '@/lib/crawl/chunk';
 import { embedTexts } from '@/lib/embeddings';
 import { createFallbackModel } from '@/lib/llm/fallback-model';
 import { buildChain } from '@/lib/llm/providers';
+import {
+  chatEventProperties,
+  hashVisitor,
+  type ChatEventInput,
+  type ChatRequestMeta,
+} from '@/lib/chat/chat-event';
 import { addChatTokens, checkChatTokenBudget, checkRail } from '@/lib/rails';
 import type { RetrievedChunk } from '@/types';
 
@@ -77,10 +83,15 @@ export interface HandleChatInput {
   raw: string;
   ip: string;
   corsHeaders?: HeadersInit;
+  /** Which route asked, and the headers analytics wants; defaults to an anonymous site request. */
+  meta?: ChatRequestMeta;
 }
 
+const SITE_META: ChatRequestMeta = { surface: 'site', userAgent: null, origin: null, referer: null };
+
 /** Answers one chat message for an agent as an AI SDK UI message stream. */
-export async function handleChat({ agentId, raw, ip, corsHeaders }: HandleChatInput): Promise<Response> {
+export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_META }: HandleChatInput): Promise<Response> {
+  const startedAt = Date.now();
   const limits = getLimits();
   const parsed = parseChatRequest(raw, limits);
   if (!parsed.ok) return apiError(parsed.status, parsed.error, corsHeaders);
@@ -93,20 +104,51 @@ export async function handleChat({ agentId, raw, ip, corsHeaders }: HandleChatIn
     return apiError(409, agent.status === 'failed' ? COPY.crawlFailed : COPY.notReady, corsHeaders);
   }
 
-  const perIp = await checkRail(db, 'chat_ip', { ip }, now, limits);
-  if (!perIp.ok) return rateLimited(perIp, corsHeaders);
-  const budget = await checkChatTokenBudget(db, now, limits);
-  if (!budget.ok) return rateLimited(budget, corsHeaders);
-
   const { turns } = parsed;
   const question = (turns.at(-1) as ChatTurn).content;
+  const visitorId = hashVisitor(ip, meta.userAgent);
+  const reportTurn = (fields: Partial<ChatEventInput> & Pick<ChatEventInput, 'outcome'>) =>
+    captureServer(
+      'chat_completed',
+      chatEventProperties({
+        agentId: agent.id,
+        domain: agent.domain,
+        meta,
+        question,
+        answer: null,
+        provider: null,
+        model: null,
+        promptTokens: null,
+        completionTokens: null,
+        latencyMs: Date.now() - startedAt,
+        retrievedChunks: 0,
+        fallbackCount: 0,
+        ...fields,
+      }),
+      visitorId,
+    );
+
+  const perIp = await checkRail(db, 'chat_ip', { ip }, now, limits);
+  if (!perIp.ok) {
+    await reportTurn({ outcome: 'rate_limited' });
+    return rateLimited(perIp, corsHeaders);
+  }
+  const budget = await checkChatTokenBudget(db, now, limits);
+  if (!budget.ok) {
+    await reportTurn({ outcome: 'rate_limited' });
+    return rateLimited(budget, corsHeaders);
+  }
+
   let embedding: number[] | undefined;
   try {
     [embedding] = await embedTexts([question], 'query');
   } catch (error) {
     console.error('Could not embed the chat question', error);
   }
-  if (!embedding) return apiError(503, COPY.providersDown, corsHeaders);
+  if (!embedding) {
+    await reportTurn({ outcome: 'provider_error' });
+    return apiError(503, COPY.providersDown, corsHeaders);
+  }
 
   const chunks = await searchChunks(db, agent.id, embedding, limits.retrievalTopK);
   await touchLastUsed(db, agent.id, now);
@@ -115,14 +157,29 @@ export async function handleChat({ agentId, raw, ip, corsHeaders }: HandleChatIn
   // Analytics and token accounting finish before the response body closes,
   // so the serverless function is still alive to send them.
   const pending: Promise<unknown>[] = [];
+  const turn = {
+    answer: '',
+    provider: null as string | null,
+    model: null as string | null,
+    promptTokens: null as number | null,
+    completionTokens: null as number | null,
+    fallbackCount: 0,
+    failed: false,
+  };
   const llmEnv = getLlmEnv();
   const model = createFallbackModel(buildChain(llmEnv), {
     firstByteTimeoutMs: llmEnv.firstByteTimeoutMs,
     onFallback: (from, to, reason) => {
+      turn.fallbackCount += 1;
       pending.push(captureServer('llm_fallback', { from, to, reason }));
     },
     onStreamError: (provider) => {
+      turn.failed = true;
       pending.push(captureServer('llm_stream_error', { provider }));
+    },
+    onProvider: (provider, modelId) => {
+      turn.provider = provider;
+      turn.model = modelId;
     },
   });
 
@@ -133,6 +190,8 @@ export async function handleChat({ agentId, raw, ip, corsHeaders }: HandleChatIn
     maxOutputTokens: limits.maxOutputTokens,
     maxRetries: 0,
     onEnd: async ({ usage, text }) => {
+      turn.promptTokens = usage.inputTokens ?? null;
+      turn.completionTokens = usage.outputTokens ?? null;
       const tokens = usage.totalTokens ?? estimateTokens(system + text);
       const added = addChatTokens(db, tokens, new Date()).catch((error: unknown) => {
         console.error('Could not record chat tokens', error);
@@ -146,10 +205,29 @@ export async function handleChat({ agentId, raw, ip, corsHeaders }: HandleChatIn
   const stream = toUIMessageStream({
     stream: result.stream,
     sendReasoning: false,
-    onError: () => COPY.providersDown,
+    onError: () => {
+      turn.failed = true;
+      return COPY.providersDown;
+    },
   }).pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
+      transform(chunk, controller) {
+        if (chunk.type === 'text-delta') turn.answer += chunk.delta;
+        controller.enqueue(chunk);
+      },
       async flush() {
+        pending.push(
+          reportTurn({
+            outcome: turn.failed ? 'provider_error' : 'ok',
+            answer: turn.answer || null,
+            provider: turn.provider,
+            model: turn.model,
+            promptTokens: turn.promptTokens,
+            completionTokens: turn.completionTokens,
+            retrievedChunks: chunks.length,
+            fallbackCount: turn.fallbackCount,
+          }),
+        );
         await Promise.allSettled(pending);
       },
     }),

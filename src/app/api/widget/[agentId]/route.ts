@@ -1,3 +1,4 @@
+import { chatRequestMeta } from '@/lib/chat/chat-event';
 import { handleChat } from '@/lib/chat/handle-chat';
 import { getClientIp } from '@/lib/rails';
 
@@ -18,7 +19,13 @@ interface RouteContext {
 export async function POST(request: Request, context: RouteContext) {
   const { agentId } = await context.params;
   const raw = await request.text();
-  return handleChat({ agentId, raw, ip: getClientIp(request.headers), corsHeaders: CORS_HEADERS });
+  return handleChat({
+    agentId,
+    raw,
+    ip: getClientIp(request.headers),
+    corsHeaders: CORS_HEADERS,
+    meta: chatRequestMeta(request.headers, 'embed'),
+  });
 }
 
 export async function OPTIONS() {
