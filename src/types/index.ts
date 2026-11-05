@@ -207,39 +207,6 @@ export interface AgentWithKBs {
 }
 
 // ============================================
-// API Route Types
-// ============================================
-
-export interface CreateAgentRequest {
-  url: string;
-  maxPages?: number;
-}
-
-export interface LegacyCreateAgentApiResponse {
-  success: boolean;
-  agentId: string;
-  agentName: string;
-  kbId: string; // Primary crawl KB ID (for backward compatibility)
-  kbIds?: string[]; // All 3 KB IDs [crawl, uploads, structured]
-  endpoint: string;
-  accessKey: string;
-  isExisting: boolean;
-  status: 'creating' | 'indexing' | 'ready' | 'error';
-  message?: string;
-  error?: string;
-}
-
-export interface LegacyAgentStatusResponse {
-  status: 'creating' | 'indexing' | 'deploying' | 'ready' | 'error';
-  kbStatus?: string;
-  agentStatus?: string;
-  endpoint?: string;
-  accessKey?: string;
-  error?: string;
-  message?: string; // Status message for UI display (e.g., "Using enhanced scraping...")
-}
-
-// ============================================
 // Local Storage Types
 // ============================================
 
@@ -346,6 +313,12 @@ export interface GetAgentResponse {
   success: true;
   agent: PublicAgent;
   isOwner: boolean;
+}
+
+export interface DemoConfigResponse {
+  success: true;
+  agentId: string;
+  status: AgentStatus;
 }
 
 export interface ApiErrorBody {

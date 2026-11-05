@@ -1,70 +1,100 @@
-/**
- * Demo Config API Endpoint
- *
- * Returns the demo agent configuration for the chat widget.
- * Uses a tiered fallback strategy:
- * 1. Fast: NEXT_PUBLIC env vars (baked into client bundle)
- * 2. Fast: .demo-config.json file (written during prebuild)
- * 3. Slow: Lazy initialization via ensureDemoAgent() (may timeout)
- *
- * GET /api/demo-config
- * Returns: { endpoint: string, accessKey: string, source: string }
- */
+import { APP_DOMAIN, DEFAULT_INSTRUCTION, getLimits, type Limits } from '@/lib/config';
+import { getDb, type Db } from '@/lib/db/client';
+import { getAgentByDomain, insertAgent, pinAgent } from '@/lib/db/agents';
+import { incrementQuota } from '@/lib/db/quota';
+import { domainKey } from '@/lib/crawl/url-guard';
+import { failStaleCrawl, releaseCrawlLock, startCrawlOrRelease, tryLockCrawl } from '@/lib/crawl/start-crawl';
+import { ensureCapacity } from '@/lib/sweep';
+import { rateLimited } from '@/lib/agent-api';
+import type { AgentRow, DemoConfigResponse } from '@/types';
 
-import { NextResponse } from 'next/server';
-import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
-import { ensureDemoAgent, getDeploymentDomain } from '@/lib/demo-agent';
+/** The crawl runs in `after()` of this invocation; must equal getLimits().crawlMaxDurationS (Next reads it statically). */
+export const maxDuration = 300;
+// Reads and writes the database on every call; never prerender it at build time.
+export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  // Fast path 1: env vars are set (baked into build)
-  if (process.env.NEXT_PUBLIC_DEMO_AGENT_ENDPOINT && process.env.NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY) {
-    return NextResponse.json({
-      endpoint: process.env.NEXT_PUBLIC_DEMO_AGENT_ENDPOINT,
-      accessKey: process.env.NEXT_PUBLIC_DEMO_AGENT_ACCESS_KEY,
-      source: 'env',
-    });
-  }
+const HOUR_MS = 60 * 60 * 1000;
 
-  // Fast path 2: config file from prebuild (instant read, no API calls)
-  const configPath = join(process.cwd(), '.demo-config.json');
-  if (existsSync(configPath)) {
-    try {
-      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-      if (config.endpoint && config.accessKey) {
-        console.log(`[demo-config] Loaded from file for domain: ${config.domain}`);
-        return NextResponse.json({
-          endpoint: config.endpoint,
-          accessKey: config.accessKey,
-          source: 'file',
-        });
-      }
-    } catch (err) {
-      console.warn('[demo-config] Failed to read config file:', err);
-    }
-  }
+function siteUrl(): URL {
+  return new URL(/^https?:\/\//i.test(APP_DOMAIN) ? APP_DOMAIN : `https://${APP_DOMAIN}`);
+}
 
-  // Slow fallback: lazy initialization (may timeout on serverless)
+function config(agent: AgentRow): Response {
+  const body: DemoConfigResponse = { success: true, agentId: agent.id, status: agent.status };
+  return Response.json(body);
+}
+
+/** One re-crawl of the failed demo agent per clock hour, shared by every instance. */
+async function demoRecrawlAllowed(db: Db, now: Date): Promise<boolean> {
+  const hourStart = Math.floor(now.getTime() / HOUR_MS) * HOUR_MS;
+  const key = `global:demo_recrawl:${now.toISOString().slice(0, 13)}`;
+  return (await incrementQuota(db, key, 1, new Date(hourStart + HOUR_MS), now)) <= 1;
+}
+
+/** The capacity 429 when a full-size crawl no longer fits, else null. */
+async function capacityRefusal(db: Db, now: Date, limits: Limits): Promise<Response | null> {
+  const capacity = await ensureCapacity(db, now, limits);
+  return capacity.ok ? null : rateLimited(capacity);
+}
+
+/** Re-crawls the failed demo agent when nobody else is and the hourly allowance has room. */
+async function revive(db: Db, agent: AgentRow, now: Date, limits: Limits): Promise<Response> {
+  if (!(await tryLockCrawl(db, agent.id, now, limits))) return config(agent);
+  let refused: Response | null;
   try {
-    const domain = getDeploymentDomain();
-    console.log(`[demo-config] Lazy init for domain: ${domain}`);
-
-    const demoAgent = await ensureDemoAgent(domain);
-
-    return NextResponse.json({
-      endpoint: demoAgent.endpoint,
-      accessKey: demoAgent.accessKey,
-      source: 'lazy-init',
-    });
-  } catch (error) {
-    console.error('[demo-config] Failed to initialize demo agent:', error);
-
-    return NextResponse.json(
-      {
-        error: 'Demo agent initialization failed',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
-    );
+    refused = (await demoRecrawlAllowed(db, now)) ? await capacityRefusal(db, now, limits) : config(agent);
+  } catch (err) {
+    await releaseCrawlLock(db, agent.id);
+    throw err;
   }
+  if (refused) {
+    await releaseCrawlLock(db, agent.id);
+    return refused;
+  }
+  await startCrawlOrRelease(db, agent.id, now);
+  return config({ ...agent, status: 'crawling' });
+}
+
+/** Creates the pinned demo agent and starts its crawl. No IP or daily crawl rails, only capacity. */
+async function createDemoAgent(db: Db, domain: string, now: Date, limits: Limits): Promise<Response> {
+  const refused = await capacityRefusal(db, now, limits);
+  if (refused) return refused;
+  const agent = await insertAgent(db, {
+    domain,
+    url: siteUrl().href,
+    name: `Sammy - ${domain}`,
+    instruction: DEFAULT_INSTRUCTION(domain),
+    ownerTokenHash: null,
+    pinned: true,
+    now,
+  });
+  if (!agent) {
+    // Another request created it first; that request started the crawl.
+    const raced = await getAgentByDomain(db, domain);
+    if (!raced) throw new Error('Demo agent insert conflicted but no row exists');
+    return config(raced);
+  }
+  if (await tryLockCrawl(db, agent.id, now, limits)) await startCrawlOrRelease(db, agent.id, now);
+  return config(agent);
+}
+
+/**
+ * GET /api/demo-config: the site's own pinned Sammy for the demo widget. Created on first
+ * call; a stranger-made agent for the app domain is adopted (pinned, owner token dropped);
+ * a failed one is re-crawled at most once an hour so the demo never stays dead.
+ */
+export async function GET() {
+  const db = getDb();
+  const limits = getLimits();
+  const now = new Date();
+  const domain = domainKey(siteUrl());
+
+  let agent = await getAgentByDomain(db, domain);
+  if (!agent) return createDemoAgent(db, domain, now, limits);
+  if (!agent.pinned) {
+    await pinAgent(db, agent.id);
+    agent = { ...agent, pinned: true, ownerTokenHash: null };
+  }
+  agent = await failStaleCrawl(db, agent, now, limits);
+  return agent.status === 'failed' ? revive(db, agent, now, limits) : config(agent);
 }
