@@ -1,16 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DEFAULT_INSTRUCTION, getLimits } from '@/lib/config';
 import type { Db } from '@/lib/db/client';
-import { getAgentByDomain, getAgentById, insertAgent } from '@/lib/db/agents';
+import { getAgentByDomain, getAgentById, insertAgent, replaceUnownedWithId } from '@/lib/db/agents';
+import { countAllChunks, insertChunksWithinCeiling } from '@/lib/db/chunks';
 import { releaseCrawlLock, tryLockCrawl } from '@/lib/crawl/start-crawl';
 import { runCrawl, type CrawlOutcome } from '@/lib/crawl/run-crawl';
-import { createTestDb, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
+import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
 import {
-  importLegacyAgents,
+  importLegacyAgents as importWithSummary,
   mapLegacyAgent,
   parseLegacyExport,
+  type ImportOptions,
+  type ImportResult,
   type LegacyAgent,
 } from './legacy-import';
+
+/** The per-agent results of an import (the summary's `stopped` is asserted separately). */
+async function importLegacyAgents(db: Db, agents: readonly LegacyAgent[], opts: ImportOptions): Promise<ImportResult[]> {
+  return (await importWithSummary(db, agents, opts)).results;
+}
 
 vi.mock('@/lib/crawl/run-crawl', () => ({ runCrawl: vi.fn(), createCrawlDeps: vi.fn(() => ({})) }));
 
@@ -247,13 +255,74 @@ describe('importLegacyAgents', () => {
   it('stops crawling with a clear note when capacity refuses', async () => {
     const tight = { ...limits, maxTotalChunks: 1 };
     // Capacity needs a full agent's worth of room; with maxChunksPerAgent > maxTotalChunks it never fits.
-    const results = await importLegacyAgents(
+    const seen: ImportResult[] = [];
+    const summary = await importWithSummary(
       db,
       [legacy({ uuid: ID_A, domain: 'a.example' }), legacy({ uuid: ID_B, domain: 'b.example' })],
-      { now: NOW, limits: tight, crawl: true },
+      { now: NOW, limits: tight, crawl: true, onResult: (r) => seen.push(r) },
     );
+    expect(summary.stopped).toMatch(/no room left/);
+    expect(summary.results).toEqual([]);
+    expect(seen).toEqual([]);
     expect(crawl).not.toHaveBeenCalled();
-    expect(results[0].crawlError).toMatch(/capacity/i);
-    expect(results[1].crawlError).toMatch(/capacity/i);
+    expect(await db.query('SELECT id FROM agents')).toHaveLength(0);
+  });
+
+  it('reports each result through onResult as it completes', async () => {
+    const seen: string[] = [];
+    await importLegacyAgents(db, [legacy({ uuid: ID_A, domain: 'a.example' }), legacy({ uuid: ID_B, domain: 'b.example' })], {
+      ...opts,
+      onResult: (r) => seen.push(r.domain),
+    });
+    expect(seen).toEqual(['a.example', 'b.example']);
+  });
+
+  it('removes the replaced row chunks with it', async () => {
+    const demo = await insertAgent(db, {
+      domain: 'sigmasynapses.com',
+      url: 'https://sigmasynapses.com',
+      name: 'auto demo',
+      instruction: '',
+      ownerTokenHash: null,
+      pinned: true,
+      now: NOW,
+    });
+    await insertChunksWithinCeiling(
+      db,
+      demo!.id,
+      [{ url: 'https://sigmasynapses.com', title: 't', pos: 0, content: 'c', embedding: fakeEmbedding(1) }],
+      limits.maxTotalChunks,
+    );
+    expect(await countAllChunks(db)).toBe(1);
+    await importLegacyAgents(db, [legacy({ uuid: ID_B, domain: 'sigmasynapses.com' })], opts);
+    expect(await countAllChunks(db)).toBe(0);
+  });
+});
+
+describe('replaceUnownedWithId', () => {
+  const input = {
+    id: ID_B,
+    domain: 'shells.example',
+    url: 'https://shells.example/',
+    name: 'legacy',
+    instruction: 'x',
+    ownerTokenHash: null,
+    pinned: false,
+    createdAt: NOW,
+    now: NOW,
+  };
+
+  it('never deletes an owned row, even when called directly', async () => {
+    const owned = await insertAgent(db, { ...input, name: 'mine', ownerTokenHash: 'hash' });
+    expect(await replaceUnownedWithId(db, input)).toBeNull();
+    expect(await getAgentById(db, owned!.id)).toMatchObject({ name: 'mine', ownerTokenHash: 'hash' });
+    expect(await getAgentById(db, ID_B)).toBeNull();
+  });
+
+  it('replaces an unowned row atomically', async () => {
+    const old = await insertAgent(db, { ...input, name: 'old' });
+    const row = await replaceUnownedWithId(db, input);
+    expect(row).toMatchObject({ id: ID_B, name: 'legacy' });
+    expect(await getAgentById(db, old!.id)).toBeNull();
   });
 });

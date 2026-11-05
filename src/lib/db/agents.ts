@@ -96,6 +96,31 @@ export async function insertAgentWithId(db: Db, input: AgentWithIdInput): Promis
   return rows[0] ? toAgentRow(rows[0]) : null;
 }
 
+/**
+ * In one transaction: removes any other agent on the same domain that has no owner token (its chunks
+ * cascade), then inserts under the given id. An owned row survives, so the insert conflicts and this
+ * returns null.
+ */
+export async function replaceUnownedWithId(db: Db, input: AgentWithIdInput): Promise<AgentRow | null> {
+  if (!isUuid(input.id)) return null;
+  const [, inserted] = await db.transaction([
+    {
+      text: 'DELETE FROM agents WHERE domain = $1 AND id <> $2 AND owner_token_hash IS NULL',
+      params: [input.domain, input.id],
+    },
+    {
+      text: `INSERT INTO agents (id, domain, url, name, instruction, status, owner_token_hash, pinned,
+               created_at, last_used_at, crawl_started_at)
+             VALUES ($1, $2, $3, $4, $5, 'crawling', $6, $7, $8, $9, $9)
+             ON CONFLICT DO NOTHING
+             RETURNING ${AGENT_COLUMNS}`,
+      params: [input.id, input.domain, input.url, input.name, input.instruction, input.ownerTokenHash, input.pinned, input.createdAt, input.now],
+    },
+  ]);
+  const row = inserted[0] as AgentDbRow | undefined;
+  return row ? toAgentRow(row) : null;
+}
+
 export async function getAgentById(db: Db, id: string): Promise<AgentRow | null> {
   if (!isUuid(id)) return null;
   const rows = await db.query<AgentDbRow>(`SELECT ${AGENT_COLUMNS} FROM agents WHERE id = $1`, [id]);

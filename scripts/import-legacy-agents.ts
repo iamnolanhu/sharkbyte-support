@@ -4,6 +4,10 @@
  * Usage (DATABASE_URL and the crawl keys come from the environment, e.g. `bun --env-file=<file>`):
  *   bun --env-file=<env file> scripts/import-legacy-agents.ts <export.json> [--dry-run] [--no-crawl]
  *
+ * --no-crawl leaves the imported rows in `crawling`; the sweep then fails them and removes the
+ * unpinned ones, so only use it when a crawl follows soon.
+ * The run stops with a non-zero exit when capacity refuses another crawl.
+ *
  * The export file is internal: keep it out of the repository.
  */
 
@@ -41,19 +45,19 @@ async function main(): Promise<void> {
   const agents = parseLegacyExport(JSON.parse(readFileSync(file, 'utf8')));
   console.log(`${dryRun ? '[dry run] ' : ''}${agents.length} agents in the export`);
 
-  const results = await importLegacyAgents(getDb(), agents, {
+  const { results, stopped } = await importLegacyAgents(getDb(), agents, {
     now: new Date(),
     limits: getLimits(),
     crawl,
     dryRun,
+    onResult: (r) => {
+      const crawlPart = r.action === 'inserted' || r.action === 'replaced' ? ` | ${describeCrawl(r)}` : '';
+      console.log(`${r.domain} | ${r.id} | ${r.note ?? r.action}${crawlPart}`);
+    },
   });
 
   const totals: Record<ImportAction, number> = { inserted: 0, replaced: 0, exists: 0, conflict: 0 };
-  for (const r of results) {
-    totals[r.action]++;
-    const crawlPart = r.action === 'inserted' || r.action === 'replaced' ? ` | ${describeCrawl(r)}` : '';
-    console.log(`${r.domain} | ${r.id} | ${r.note ?? r.action}${crawlPart}`);
-  }
+  for (const r of results) totals[r.action]++;
   const crawled = results.filter((r) => r.crawl);
   console.log(
     `Totals: inserted ${totals.inserted}, replaced ${totals.replaced}, exists ${totals.exists}, conflict ${totals.conflict}` +
@@ -61,6 +65,10 @@ async function main(): Promise<void> {
       ` failed ${crawled.filter((r) => r.crawl?.status === 'failed').length}),` +
       ` crawl errors ${results.filter((r) => r.crawlError).length}`,
   );
+  if (stopped) {
+    console.error(stopped);
+    process.exit(1);
+  }
 }
 
 main().catch((err: unknown) => {

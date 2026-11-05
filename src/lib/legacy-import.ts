@@ -9,11 +9,11 @@ import { releaseCrawlLock, tryLockCrawl } from '@/lib/crawl/start-crawl';
 import { domainKey, normalizeSubmittedUrl } from '@/lib/crawl/url-guard';
 import type { Db } from '@/lib/db/client';
 import {
-  deleteAgent,
   getAgentByDomain,
   getAgentById,
   insertAgentWithId,
   isUuid,
+  replaceUnownedWithId,
   type AgentWithIdInput,
 } from '@/lib/db/agents';
 import { ensureCapacity } from '@/lib/sweep';
@@ -112,29 +112,38 @@ export interface ImportOptions {
   crawl: boolean;
   /** Report what would happen without writing or crawling. */
   dryRun?: boolean;
+  /** Called with each agent's result as soon as it is final. */
+  onResult?: (result: ImportResult) => void;
 }
 
-/** Decides and (unless dry-run) performs the insert; `null` row means nothing was written. */
+export interface ImportSummary {
+  results: ImportResult[];
+  /** Set when the run stopped early (capacity refused); later agents were neither inserted nor crawled. */
+  stopped: string | null;
+}
+
+/** Decides and (unless dry-run) performs the write; `stopped` is set when `guard` refuses a write. */
 async function place(
   db: Db,
   input: AgentWithIdInput,
   dryRun: boolean,
-): Promise<{ action: ImportAction; note?: string; wrote: boolean }> {
+  guard: () => Promise<string | null>,
+): Promise<{ action: ImportAction; note?: string; wrote: boolean; stopped?: string }> {
   if (await getAgentById(db, input.id)) return { action: 'exists', wrote: false };
   const sameDomain = await getAgentByDomain(db, input.domain);
   if (sameDomain?.ownerTokenHash) {
     return { action: 'conflict', note: 'conflict: owned row kept', wrote: false };
   }
   if (dryRun) return { action: sameDomain ? 'replaced' : 'inserted', wrote: false };
-  if (sameDomain) await deleteAgent(db, sameDomain.id);
-  const row = await insertAgentWithId(db, input);
-  if (!row) return { action: 'conflict', note: 'conflict: row appeared during import, skipped', wrote: false };
+  const refusal = await guard();
+  if (refusal) return { action: 'conflict', wrote: false, stopped: refusal };
+  // The pre-check above is for reporting; the write itself only removes unowned rows, atomically.
+  const row = sameDomain ? await replaceUnownedWithId(db, input) : await insertAgentWithId(db, input);
+  if (!row) return { action: 'conflict', note: 'conflict: owned row kept', wrote: false };
   return { action: sameDomain ? 'replaced' : 'inserted', wrote: true };
 }
 
 async function crawlLocked(db: Db, id: string, opts: ImportOptions): Promise<Pick<ImportResult, 'crawl' | 'crawlError'>> {
-  const capacity = await ensureCapacity(db, opts.now, opts.limits);
-  if (!capacity.ok) return { crawl: null, crawlError: `capacity refused the crawl: ${capacity.message}` };
   if (!(await tryLockCrawl(db, id, opts.now, opts.limits))) {
     return { crawl: null, crawlError: 'another crawl already holds the lock' };
   }
@@ -155,14 +164,22 @@ export async function importLegacyAgents(
   db: Db,
   agents: readonly LegacyAgent[],
   opts: ImportOptions,
-): Promise<ImportResult[]> {
+): Promise<ImportSummary> {
   const results: ImportResult[] = [];
+  /** Before each write when crawling: a full database stops the whole run. */
+  const guard = async (): Promise<string | null> => {
+    if (!opts.crawl) return null;
+    const capacity = await ensureCapacity(db, opts.now, opts.limits);
+    return capacity.ok ? null : `Stopped: no room left for another crawl (${capacity.message})`;
+  };
   for (const agent of agents) {
     const input = mapLegacyAgent(agent, opts.now, opts.limits);
-    const placed = await place(db, input, opts.dryRun === true);
+    const placed = await place(db, input, opts.dryRun === true, guard);
+    if (placed.stopped) return { results, stopped: placed.stopped };
     const result: ImportResult = { id: input.id, domain: input.domain, action: placed.action, note: placed.note, crawl: null };
     if (placed.wrote && opts.crawl) Object.assign(result, await crawlLocked(db, input.id, opts));
     results.push(result);
+    opts.onResult?.(result);
   }
-  return results;
+  return { results, stopped: null };
 }
