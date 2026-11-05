@@ -1,4 +1,5 @@
 import { captureServer } from '@/lib/analytics/server';
+import { PROVIDERS_DOWN_COPY } from '@/lib/chat/copy';
 import { APP_DOMAIN } from '@/lib/config';
 import type { Db } from '@/lib/db/client';
 import { getAgentById } from '@/lib/db/agents';
@@ -64,6 +65,6 @@ export const COPY = {
   notReady: "Sammy is still exploring this site — try again once it's ready.",
   crawlFailed: "This Sammy couldn't read the site. Try Repair, or make one for another page.",
   busy: 'Sammy is already diving into that site — try again in a moment.',
-  providersDown: "Sammy's fins are tangled — every free model is busy. Try again in a minute.",
+  providersDown: PROVIDERS_DOWN_COPY,
   tooLong: 'That message is a whale — keep it under 2,000 characters.',
 } as const;

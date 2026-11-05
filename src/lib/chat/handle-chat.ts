@@ -142,7 +142,12 @@ export async function handleChat({ agentId, raw, ip, corsHeaders }: HandleChatIn
     },
   });
 
-  const stream = toUIMessageStream({ stream: result.stream, onError: () => COPY.providersDown }).pipeThrough(
+  // Reasoning stays on the server: the client stores and resends every message it receives.
+  const stream = toUIMessageStream({
+    stream: result.stream,
+    sendReasoning: false,
+    onError: () => COPY.providersDown,
+  }).pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       async flush() {
         await Promise.allSettled(pending);

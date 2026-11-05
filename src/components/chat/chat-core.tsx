@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useChat as useAiChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { track } from '@/lib/analytics/client';
+import { PROVIDERS_DOWN_COPY } from '@/lib/chat/copy';
 
 export interface ChatMessage {
   id: string;
@@ -41,20 +42,38 @@ const MAX_HISTORY_MESSAGES = 20;
 
 const REEF_COPY = 'Sorry, Sammy hit a reef. Please try again.';
 
-/** The POST body for /api/chat and /api/widget/[agentId]. */
+const isLocalError = (message: UIMessage): boolean => message.id.startsWith(LOCAL_ERROR_PREFIX);
+
+/**
+ * The POST body for /api/chat and /api/widget/[agentId]. Only text parts travel (no
+ * reasoning, no step markers), messages left without text are dropped, and a user message
+ * answered only by a local error bubble is dropped with it: that request was rejected or
+ * never answered, so resending it would fail the same way (a 413 would poison every send).
+ */
 export function buildChatRequestBody(
   agentId: string,
   messages: UIMessage[],
 ): { agentId: string; messages: UIMessage[] } {
-  const history = messages.filter((m) => !m.id.startsWith(LOCAL_ERROR_PREFIX));
+  const withText: UIMessage[] = [];
+  for (const message of messages) {
+    const parts = message.parts.filter((part) => part.type === 'text' && part.text.length > 0);
+    if (parts.length > 0) withText.push({ id: message.id, role: message.role, parts });
+  }
+  const history = withText.filter((message, i) => {
+    if (isLocalError(message)) return false;
+    const next = withText[i + 1];
+    return !(message.role === 'user' && next !== undefined && isLocalError(next));
+  });
   return { agentId, messages: history.slice(-MAX_HISTORY_MESSAGES) };
 }
 
 /**
  * What to show for a failed request. The transport puts the response body in the error
- * message, so an `ApiErrorBody` from the server (rails, retired, not ready) is shown as is.
+ * message, so an `ApiErrorBody` from the server (rails, retired, not ready) is shown as is;
+ * a stream that failed on every provider ends with the providers-down copy as its error text.
  */
 export function chatErrorCopy(error: Error): { text: string; rail?: string } {
+  if (error.message === PROVIDERS_DOWN_COPY) return { text: PROVIDERS_DOWN_COPY };
   let parsed: unknown;
   try {
     parsed = JSON.parse(error.message);

@@ -239,6 +239,24 @@ describe('handleChat', () => {
     expect(await readQuota(db, railKey('chat_tokens', '', NOW), NOW)).toBe(42);
   });
 
+  it('never streams the model reasoning to the client', async () => {
+    const agent = await makeAgent('reef.example');
+    useModel([
+      { type: 'stream-start', warnings: [] },
+      { type: 'reasoning-start', id: 'r' },
+      { type: 'reasoning-delta', id: 'r', delta: 'secret chain of thought' },
+      { type: 'reasoning-end', id: 'r' },
+      ...answerParts('Sharks love docs').slice(1),
+    ]);
+
+    const res = await handleChat({ agentId: agent.id, raw: body([userMessage('fins?')]), ip: IP });
+    const text = await res.text();
+
+    expect(text).toContain('Sharks love docs');
+    expect(text).not.toContain('secret chain of thought');
+    expect(text).not.toContain('"reasoning-');
+  });
+
   it('21st message in a minute is 429 chat_ip', async () => {
     const agent = await makeAgent('reef.example');
     for (let i = 0; i < LIMITS.chatMessagesPerIpPerMinute; i++) await checkRail(db, 'chat_ip', { ip: IP }, NOW, LIMITS);
