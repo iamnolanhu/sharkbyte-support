@@ -74,6 +74,28 @@ export async function insertAgent(db: Db, input: NewAgentInput): Promise<AgentRo
   return rows[0] ? toAgentRow(rows[0]) : null;
 }
 
+export interface AgentWithIdInput extends NewAgentInput {
+  id: string;
+  createdAt: Date;
+}
+
+/**
+ * Inserts a `crawling` agent under a caller-chosen id and creation time (the legacy import keeps the
+ * original ids so old embed snippets resolve); null when the id or the domain is already taken.
+ */
+export async function insertAgentWithId(db: Db, input: AgentWithIdInput): Promise<AgentRow | null> {
+  if (!isUuid(input.id)) return null;
+  const rows = await db.query<AgentDbRow>(
+    `INSERT INTO agents (id, domain, url, name, instruction, status, owner_token_hash, pinned,
+       created_at, last_used_at, crawl_started_at)
+     VALUES ($1, $2, $3, $4, $5, 'crawling', $6, $7, $8, $9, $9)
+     ON CONFLICT DO NOTHING
+     RETURNING ${AGENT_COLUMNS}`,
+    [input.id, input.domain, input.url, input.name, input.instruction, input.ownerTokenHash, input.pinned, input.createdAt, input.now],
+  );
+  return rows[0] ? toAgentRow(rows[0]) : null;
+}
+
 export async function getAgentById(db: Db, id: string): Promise<AgentRow | null> {
   if (!isUuid(id)) return null;
   const rows = await db.query<AgentDbRow>(`SELECT ${AGENT_COLUMNS} FROM agents WHERE id = $1`, [id]);
