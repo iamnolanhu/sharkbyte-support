@@ -207,6 +207,17 @@ export const FIRECRAWL_CONFIG = {
   },
 } as const;
 
+// Embeddings (NVIDIA Build, OpenAI-compatible). Changing the model or dimensions means re-crawling every agent.
+export const EMBEDDING_CONFIG = {
+  baseUrl: 'https://integrate.api.nvidia.com/v1',
+  get model() {
+    return process.env.EMBEDDING_MODEL?.trim() || 'nvidia/nemotron-3.5-embed-1b';
+  },
+  // Must match the halfvec(1024) column in the chunks table
+  dimensions: 1024,
+  batchSize: 32,
+} as const;
+
 // Content Quality Detection Configuration
 // Used to detect when indexed content is login/auth pages instead of useful content
 export const CONTENT_QUALITY_CONFIG = {
