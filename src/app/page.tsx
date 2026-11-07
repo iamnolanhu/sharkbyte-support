@@ -8,6 +8,7 @@ import { UrlInput } from '@/components/url-input';
 import { ProgressIndicator } from '@/components/progress-indicator';
 import { WaveBackground } from '@/components/wave-background';
 import { SammyAvatar } from '@/components/sammy-avatar';
+import { Footer } from '@/components/footer';
 import { TIMING } from '@/lib/config';
 import { track } from '@/lib/analytics/client';
 import { saveStoredAgent } from '@/lib/stored-agents';
@@ -250,6 +251,15 @@ export default function Home() {
                   <p className="text-[10px] sm:text-xs md:text-sm text-muted-foreground leading-tight">{feature.desc}</p>
                 </div>
               ))}
+            </motion.div>
+
+            {/* Footer */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.6 }}
+            >
+              <Footer />
             </motion.div>
           </motion.div>
         ) : (

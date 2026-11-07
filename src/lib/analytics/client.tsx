@@ -10,7 +10,6 @@ export type ClientEvent =
   | 'chat_message_sent'
   | 'embed_code_copied'
   | 'embed_widget_opened'
-  | 'footer_sigma_clicked'
   | 'demo_limit_hit';
 
 export type AnalyticsSurface = 'site' | 'embed';
