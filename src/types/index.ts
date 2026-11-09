@@ -110,6 +110,11 @@ export interface GetAgentResponse {
   isOwner: boolean;
 }
 
+export interface ListAgentsResponse {
+  success: true;
+  agents: PublicAgent[];
+}
+
 export interface DemoConfigResponse {
   success: true;
   agentId: string;

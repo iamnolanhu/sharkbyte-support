@@ -37,8 +37,8 @@ export async function createTestDb(): Promise<Db> {
   return wrap(await (await template).clone());
 }
 
-/** Timeout for a hook that calls createTestDb (the first call boots PGlite). */
-export const TEST_DB_TIMEOUT_MS = 30_000;
+/** Timeout for a hook that calls createTestDb (the first call boots PGlite); TEST_DB_TIMEOUT_MS raises it on a loaded machine. */
+export const TEST_DB_TIMEOUT_MS = Number(process.env.TEST_DB_TIMEOUT_MS) || 30_000;
 
 export const EMBEDDING_DIMS = 1024;
 

@@ -127,6 +127,20 @@ export async function getAgentById(db: Db, id: string): Promise<AgentRow | null>
   return rows[0] ? toAgentRow(rows[0]) : null;
 }
 
+/** Most agents the public History list returns; the sweep keeps the table far smaller than this. */
+export const PUBLIC_LIST_LIMIT = 100;
+
+/** Agents that work or are on their way (`ready`, `crawling`): pinned first, then newest. */
+export async function listListedAgents(db: Db): Promise<AgentRow[]> {
+  const rows = await db.query<AgentDbRow>(
+    `SELECT ${AGENT_COLUMNS} FROM agents
+     WHERE status IN ('ready', 'crawling')
+     ORDER BY pinned DESC, created_at DESC, id
+     LIMIT ${PUBLIC_LIST_LIMIT}`,
+  );
+  return rows.map(toAgentRow);
+}
+
 export async function getAgentByDomain(db: Db, domain: string): Promise<AgentRow | null> {
   const rows = await db.query<AgentDbRow>(`SELECT ${AGENT_COLUMNS} FROM agents WHERE domain = $1`, [domain]);
   return rows[0] ? toAgentRow(rows[0]) : null;

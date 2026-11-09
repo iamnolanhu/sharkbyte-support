@@ -2,19 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { History, Globe, Plus, ChevronDown } from 'lucide-react';
+import { History, Globe, Plus, ChevronDown, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { listStoredAgents } from '@/lib/stored-agents';
-import type { StoredAgent } from '@/types';
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
-}
+import { mergeHistory, parseListedAgents } from '@/lib/history-list';
+import type { PublicAgent, StoredAgent } from '@/types';
 
 function formatTimeAgo(dateString: string): string {
   const date = new Date(dateString);
@@ -34,13 +27,31 @@ function formatTimeAgo(dateString: string): string {
 export function AgentHistory() {
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
-  const [agents, setAgents] = useState<StoredAgent[]>([]);
+  const [local, setLocal] = useState<StoredAgent[]>([]);
+  const [listed, setListed] = useState<PublicAgent[]>([]);
+  const [hasFetched, setHasFetched] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const agents = mergeHistory(local, listed);
 
-  // This browser's own list; no network call. Re-read each time the dropdown opens.
+  // This browser's own list, re-read each time the dropdown opens.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is browser-only, so it is read after mount
-    setAgents(listStoredAgents(localStorage));
+    setLocal(listStoredAgents(localStorage));
+  }, [isOpen]);
+
+  // Every listed Sammy from the server: on mount (for the badge) and again each time the dropdown opens.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/agents', { signal: controller.signal })
+      .then((res) => res.json())
+      .then((body: unknown) => setListed(parseListedAgents(body)))
+      .catch(() => {
+        // Offline or aborted: the menu still shows this browser's own Sammys.
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setHasFetched(true);
+      });
+    return () => controller.abort();
   }, [isOpen]);
 
   // Close dropdown when clicking outside
@@ -102,7 +113,12 @@ export function AgentHistory() {
             </div>
 
             <div className="max-h-64 overflow-y-auto">
-              {agents.length === 0 ? (
+              {agents.length === 0 && !hasFetched ? (
+                <div className="p-4 text-center text-muted-foreground text-sm">
+                  <Loader2 className="w-6 h-6 mx-auto mb-2 animate-spin" />
+                  <p>Loading chatbots...</p>
+                </div>
+              ) : agents.length === 0 ? (
                 <div className="p-4 text-center text-muted-foreground text-sm">
                   <History className="w-8 h-8 mx-auto mb-2 opacity-50" />
                   <p>No chatbots yet</p>
@@ -119,10 +135,16 @@ export function AgentHistory() {
                       <Globe className="w-4 h-4 text-primary" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">
-                        {hostOf(agent.url)}
-                      </p>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <p className="font-medium text-sm truncate">{agent.host}</p>
+                        {agent.mine && (
+                          <span className="flex-shrink-0 bg-primary/20 text-primary text-[10px] font-medium px-1.5 py-0.5 rounded-full">
+                            Yours
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-muted-foreground">
+                        {agent.status === 'crawling' ? 'Exploring… · ' : ''}
                         {formatTimeAgo(agent.createdAt)}
                       </p>
                     </div>
