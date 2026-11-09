@@ -90,8 +90,9 @@ requests with HTTP 500; a batch that still fails is split in halves down to sing
 
 **Changing the embedding size.** On the first request after a deploy, the schema compares
 `chunks.embedding` with `EMBEDDING_DIMS`. Without `EMBEDDING_DIMS_MIGRATE=1` a mismatch changes
-nothing: it is logged, sent as `embedding_dims_mismatch`, crawls fail with a message naming both
-sizes, and chat answers "Sammy couldn't read your question". With `EMBEDDING_DIMS_MIGRATE=1` it
+nothing: it is logged with both sizes and sent as `embedding_dims_mismatch`; crawls fail, Repair
+is refused before it deletes anything, and chat refuses to search, all showing visitors "Sammy is
+being re-tuned — try again soon". With `EMBEDDING_DIMS_MIGRATE=1` it
 empties `chunks`, resizes the column, marks every agent that is not crawling `failed` with
 "re-embedding required" (crawling ones keep crawling from scratch), and sends
 `embedding_dims_migrated`. Agents waiting for re-embedding are kept past the 24-hour
@@ -104,7 +105,9 @@ failed-agent rule (the 14-day idle rule still applies). Runbook:
    `bun --env-file=<file> scripts/import-legacy-agents.ts <export.json>`; it re-crawls exactly
    the rows marked "re-embedding required". When crawls spend their share of the day's
    embedding requests the run stops with "paused: daily embedding limit spent, re-run after
-   00:00 UTC"; run it again after midnight UTC and it resumes the rows left `crawling`. Owners re-crawl their own with **Repair**, and
+   00:00 UTC"; run it again after midnight UTC. A re-run resumes the rows left `crawling`, resumes
+   the ones the daily sweep ended `ready` with pages still to read, and re-crawls the ones the
+   sweep failed after they stalled ("ran out of air"). Owners re-crawl their own with **Repair**, and
    anyone can by submitting the URL again.
 4. Remove `EMBEDDING_DIMS_MIGRATE` from the environment.
 

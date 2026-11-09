@@ -379,7 +379,7 @@ describe('handleChat', () => {
     errorSpy.mockRestore();
     vi.unstubAllEnvs();
     expect(res.status).toBe(503);
-    expect(((await res.json()) as { error: string }).error).toBe(COPY.embeddingFailed);
+    expect(((await res.json()) as { error: string }).error).toBe(COPY.retuning);
     expect(embedTexts).not.toHaveBeenCalled();
   });
 

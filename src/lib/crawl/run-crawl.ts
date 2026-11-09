@@ -25,6 +25,7 @@ import { EmbeddingRateLimitError } from '@/lib/embedding-errors';
 import { embedTexts, type EmbedFn } from '@/lib/embeddings';
 import { scrapeUrl, type ScrapeResult } from '@/lib/firecrawl';
 import { RAIL_COPY, checkRail, embedRailSpent, embedRequestGate } from '@/lib/rails';
+import { RETUNING_COPY } from '@/lib/chat/copy';
 import type { ChunkInput } from '@/types';
 import { chunkText } from './chunk';
 import { discoverUrls, type Fetcher } from './discover';
@@ -154,12 +155,14 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
       }
     });
 
+  // The row is written first: if that fails, the page stays pending here and in the database,
+  // so the slice cannot finish the crawl over it and a later slice retries it.
   const skipPage = (url: string) =>
     serialized(async () => {
+      await recordCrawledPage(db, agentId, url, { pagesCrawled, chunkCount, pagesSkipped: pagesSkipped + 1 }, new Date(deps.now()));
       pagesSkipped += 1;
       pagesThisSlice += 1;
       pending = pending.filter((u) => u !== url);
-      await recordCrawledPage(db, agentId, url, { pagesCrawled, chunkCount, pagesSkipped }, new Date(deps.now()));
     });
 
   const crawlPage = async (url: string): Promise<void> => {
@@ -179,7 +182,8 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
     // Vectors of another size cannot be stored: fail loudly instead of crawling for nothing.
     const mismatch = agent.status === 'crawling' ? await embeddingSizeMismatch(db) : null;
     if (mismatch) {
-      failureCopy = `Sammy can't store pages right now: ${mismatch}.`;
+      // Visitors get generic copy; the sizes and the opt-in stay in the log (and PostHog).
+      failureCopy = RETUNING_COPY;
       throw new Error(mismatch);
     }
     // No embeddings left for crawls today: fetch nothing, change nothing.

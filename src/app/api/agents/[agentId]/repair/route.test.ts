@@ -207,6 +207,9 @@ describe('POST /api/agents/[agentId]/repair', () => {
     const res = await repair(agent.id, token);
     errorSpy.mockRestore();
     expect(res.status).toBe(503);
+    const error = ((await res.json()) as { error: string }).error;
+    expect(error).toBe('Sammy is being re-tuned — try again soon');
+    expect(error).not.toMatch(/EMBEDDING|halfvec/);
     expect(await countAllChunks(db)).toBe(2);
     expect((await getAgentById(db, agent.id))?.status).toBe('ready');
     expect(background).not.toHaveBeenCalled();

@@ -176,7 +176,7 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
   if (mismatch) {
     console.error(`Chat cannot search: ${mismatch}`);
     await reportTurn({ outcome: 'embedding_error' });
-    return apiError(503, COPY.embeddingFailed, corsHeaders);
+    return apiError(503, COPY.retuning, corsHeaders);
   }
 
   let embedding: number[] | undefined;

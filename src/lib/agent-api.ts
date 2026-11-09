@@ -1,5 +1,5 @@
 import { captureServer } from '@/lib/analytics/server';
-import { PROVIDERS_DOWN_COPY } from '@/lib/chat/copy';
+import { PROVIDERS_DOWN_COPY, RETUNING_COPY } from '@/lib/chat/copy';
 import { APP_DOMAIN } from '@/lib/config';
 import type { Db } from '@/lib/db/client';
 import { getAgentById } from '@/lib/db/agents';
@@ -68,5 +68,6 @@ export const COPY = {
   crawlStartFailed: 'The tide pulled Sammy back — try again in a moment.',
   providersDown: PROVIDERS_DOWN_COPY,
   embeddingFailed: "Sammy couldn't read your question — try again in a moment",
+  retuning: RETUNING_COPY,
   tooLong: 'That message is a whale — keep it under 2,000 characters.',
 } as const;

@@ -374,6 +374,38 @@ describe('runCrawl', () => {
       expect(await getAgentById(db, id)).toEqual(before);
     });
 
+    it('a skipped page whose record fails stays pending and the crawl stays open', async () => {
+      const id = await newAgent('shaky.example');
+      // The skip record (and only it) fails once.
+      let failNextSkip = true;
+      const shakyDb: Db = {
+        query: async (text, params) => {
+          if (failNextSkip && text.includes('crawl_skipped = $5')) {
+            failNextSkip = false;
+            throw new Error('connection reset');
+          }
+          return db.query(text, params);
+        },
+        transaction: (statements) => db.transaction(statements),
+      };
+      const embed: EmbedFn = async (texts, inputType) => {
+        if (texts.some((t) => t.includes('shaky.example/a '))) throw new Error('Gemini embeddings failed with HTTP 500');
+        return fakeEmbed(texts, inputType);
+      };
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const outcome = await runCrawl(
+        id,
+        makeDeps({ db: shakyDb, fetcher: siteFetcher('shaky.example', { '/': 1, '/a': 1, '/b': 1 }), embed }),
+      );
+
+      logged.mockRestore();
+      // The other pages were stored; the page whose skip was not recorded is still to do.
+      expect(outcome).toMatchObject({ status: 'crawling', pagesCrawled: 2, chunkCount: 2 });
+      expect(await pending(id)).toEqual(['https://shaky.example/a']);
+      expect((await getAgentById(db, id))?.status).toBe('crawling');
+    });
+
     it('stores each page and takes it off the to-do list together', async () => {
       const id = await newAgent('atomic.example');
       await runCrawl(id, makeDeps({ fetcher: siteFetcher('atomic.example', { '/': 2, '/a': 3 }) }));
@@ -561,8 +593,10 @@ describe('runCrawl', () => {
     logged.mockRestore();
     vi.unstubAllEnvs();
     expect(outcome.status).toBe('failed');
-    // Both sizes reach the agent's visible error too, not only the log.
-    expect((await getAgentById(db, id))?.lastError).toMatch(/halfvec\(768\).*EMBEDDING_DIMS is 1536/);
+    // Visitors get generic copy; the sizes and the opt-in stay in the log.
+    const lastError = (await getAgentById(db, id))?.lastError;
+    expect(lastError).toBe('Sammy is being re-tuned — try again soon');
+    expect(lastError).not.toMatch(/EMBEDDING|halfvec/);
     expect(embed).not.toHaveBeenCalled();
   });
 

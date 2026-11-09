@@ -200,6 +200,26 @@ interface CrawlStateRow {
   previous_progress_at: Date | string | null;
 }
 
+/** Puts a partially crawled agent back to `crawling`, keeping its pages and to-do list. */
+export async function reopenCrawl(db: Db, id: string, now: Date): Promise<void> {
+  if (!isUuid(id)) return;
+  await db.query(
+    `UPDATE agents SET status = 'crawling', last_error = NULL, crawl_slices = 0, crawl_progress_at = $2
+     WHERE id = $1`,
+    [id, now],
+  );
+}
+
+/** Where a partially crawled agent stands: true when its to-do list still holds URLs. */
+export async function hasPendingPages(db: Db, id: string): Promise<boolean> {
+  if (!isUuid(id)) return false;
+  const rows = await db.query<{ n: number | string | null }>(
+    'SELECT cardinality(crawl_pending) AS n FROM agents WHERE id = $1',
+    [id],
+  );
+  return Number(rows[0]?.n ?? 0) > 0;
+}
+
 /** Counts a new slice of a `crawling` agent and returns its state; null when it is not crawling. */
 export async function beginCrawlSlice(db: Db, id: string, now: Date): Promise<CrawlState | null> {
   if (!isUuid(id)) return null;

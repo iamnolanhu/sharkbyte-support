@@ -21,8 +21,8 @@ export const STALE_CRAWL_ERROR = 'Sammy ran out of air mid-dive — press Repair
 
 /**
  * Finishes crawls that made no progress for a slice's time limit plus grace (nobody polled to
- * start the next slice, or slices kept dying): `ready` with the pages stored so far, or
- * `failed` when nothing was stored.
+ * start the next slice, or slices kept dying): `ready` with the pages stored so far (keeping
+ * the URLs still to read), or `failed` when nothing was stored.
  */
 async function finishStalledCrawls(db: Db, now: Date, limits: Limits): Promise<number> {
   const cutoff = new Date(now.getTime() - (limits.crawlMaxDurationS + STALE_CRAWL_GRACE_S) * 1000);
@@ -30,7 +30,8 @@ async function finishStalledCrawls(db: Db, now: Date, limits: Limits): Promise<n
     `UPDATE agents
      SET status = CASE WHEN chunk_count > 0 THEN 'ready' ELSE 'failed' END,
          last_error = CASE WHEN chunk_count > 0 THEN NULL ELSE $2 END,
-         crawl_pending = NULL
+         -- A partial crawl keeps its to-do list so an operator import can resume it.
+         crawl_pending = CASE WHEN chunk_count > 0 THEN crawl_pending ELSE NULL END
      WHERE status = 'crawling' AND COALESCE(crawl_progress_at, crawl_started_at) < $1
      RETURNING id`,
     [cutoff, STALE_CRAWL_ERROR],

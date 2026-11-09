@@ -112,6 +112,23 @@ describe('sweep', () => {
     expect(await countAllChunks(db)).toBe(10);
   });
 
+  it('a stalled partial crawl ends ready but keeps its to-do list for a resume', async () => {
+    const id = await seed('partial.test', { status: 'crawling', crawlStartedAgoMs: (limits.crawlMaxDurationS + 31) * 1000, chunks: 2 });
+    await db.query(`UPDATE agents SET crawl_pending = ARRAY['https://partial.test/next'] WHERE id = $1`, [id]);
+    const empty = await seed('nothing.test', { status: 'crawling', crawlStartedAgoMs: (limits.crawlMaxDurationS + 31) * 1000 });
+    await db.query(`UPDATE agents SET crawl_pending = ARRAY['https://nothing.test/'] WHERE id = $1`, [empty]);
+
+    await sweep(db, NOW, limits);
+
+    const rows = await db.query<{ domain: string; status: string; crawl_pending: string[] | null }>(
+      `SELECT domain, status, crawl_pending FROM agents WHERE domain IN ('partial.test', 'nothing.test') ORDER BY domain`,
+    );
+    expect(rows).toEqual([
+      { domain: 'nothing.test', status: 'failed', crawl_pending: null },
+      { domain: 'partial.test', status: 'ready', crawl_pending: ['https://partial.test/next'] },
+    ]);
+  });
+
   it('keeps agents awaiting re-embedding past the failed-agent day, until the idle rule', async () => {
     const waiting = await seed('waiting.test', { status: 'failed', lastUsedAgoMs: 25 * HOUR });
     await db.query(`UPDATE agents SET last_error = 're-embedding required' WHERE id = $1`, [waiting]);

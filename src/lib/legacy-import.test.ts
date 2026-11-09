@@ -187,6 +187,36 @@ describe('importLegacyAgents', () => {
     expect(await db.query('SELECT id FROM agents')).toHaveLength(1);
   });
 
+  it('after the sweep: re-crawls a stale-failed row, resumes a partial ready one, leaves a finished one', async () => {
+    const all = [
+      legacy({ uuid: ID_A, domain: 'a.example' }),
+      legacy({ uuid: ID_B, domain: 'b.example' }),
+      legacy({ uuid: ID_C, domain: 'c.example' }),
+    ];
+    await importLegacyAgents(db, all, opts);
+    await finishCrawl(db, ID_A, { status: 'failed', lastError: 'Sammy ran out of air mid-dive — press Repair to try again.' });
+    await insertChunksWithinCeiling(
+      db,
+      ID_B,
+      [{ url: 'https://b.example', title: 't', pos: 0, content: 'kept', embedding: fakeEmbedding(1) }],
+      limits.maxTotalChunks,
+    );
+    await db.query(`UPDATE agents SET status = 'ready', chunk_count = 1, crawl_pending = ARRAY['https://b.example/next'] WHERE id = $1`, [ID_B]);
+    await finishCrawl(db, ID_C, { status: 'ready', lastError: null });
+    const statusAtCrawl: Record<string, string> = {};
+    crawl.mockImplementation(async (id) => {
+      statusAtCrawl[id] = String((await getAgentById(db, id))?.status);
+      return outcome;
+    });
+
+    const results = await importLegacyAgents(db, all, { ...opts, crawl: true });
+
+    expect(results.map((r) => r.action)).toEqual(['recrawled', 'resumed', 'exists']);
+    // Both are crawling when their slice runs; the resumed one keeps its stored page.
+    expect(statusAtCrawl).toEqual({ [ID_A]: 'crawling', [ID_B]: 'crawling' });
+    expect(await countAllChunks(db)).toBe(1);
+  });
+
   it('resumes an unowned row left crawling, without resetting it', async () => {
     const agents = [legacy({ uuid: ID_A, domain: 'shells.example' })];
     await importLegacyAgents(db, agents, opts);

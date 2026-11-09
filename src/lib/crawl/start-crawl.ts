@@ -120,7 +120,7 @@ async function railRefusal(db: Db, agentId: string, ip: string, now: Date, limit
   const mismatch = await embeddingSizeMismatch(db);
   if (mismatch) {
     console.error(`Re-crawl refused: ${mismatch}`);
-    return apiError(503, COPY.crawlStartFailed);
+    return apiError(503, COPY.retuning);
   }
   const embedShare = await crawlEmbedRefusal(db, now, limits);
   if (embedShare) return rateLimited(embedShare);

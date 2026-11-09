@@ -13,13 +13,15 @@ import {
   getAgentById,
   insertAgentWithId,
   isUuid,
+  hasPendingPages,
+  reopenCrawl,
   replaceUnownedWithId,
   resetForCrawl,
   type AgentWithIdInput,
 } from '@/lib/db/agents';
 import { REEMBED_REQUIRED_ERROR } from '@/lib/db/schema';
 import { embedRailSpent } from '@/lib/rails';
-import { ensureCapacity } from '@/lib/sweep';
+import { ensureCapacity, STALE_CRAWL_ERROR } from '@/lib/sweep';
 
 /** The fields of an exported agent that the import uses. */
 export interface LegacyAgent {
@@ -150,10 +152,14 @@ async function place(
   if (SKIP_DOMAINS.has(input.domain)) return { action: 'skipped', note: 'skipped: on the skip list', wrote: false };
   const existing = await getAgentById(db, input.id);
   if (existing) {
-    // Only rows an embedding migration emptied are re-crawled, and unfinished crawls resumed;
-    // other rows stay as they are.
-    const needsReembed = existing.status === 'failed' && existing.lastError === REEMBED_REQUIRED_ERROR;
-    const unfinished = existing.status === 'crawling';
+    // Re-crawled from scratch: rows an embedding migration emptied, and crawls the sweep failed
+    // after they stalled (e.g. a paused import). Resumed: unfinished crawls, including partial
+    // ones the sweep ended `ready` with URLs still to read. Other rows stay as they are.
+    const needsReembed =
+      existing.status === 'failed' &&
+      (existing.lastError === REEMBED_REQUIRED_ERROR || existing.lastError === STALE_CRAWL_ERROR);
+    const unfinished =
+      existing.status === 'crawling' || (existing.status === 'ready' && (await hasPendingPages(db, existing.id)));
     if ((!needsReembed && !unfinished) || existing.ownerTokenHash) return { action: 'exists', wrote: false };
     const action: ImportAction = needsReembed ? 'recrawled' : 'resumed';
     if (dryRun) return { action, wrote: false };
@@ -195,6 +201,7 @@ async function crawlLocked(db: Db, id: string, opts: ImportOptions, reset: boole
   }
   try {
     if (reset) await resetForCrawl(db, id, new Date());
+    else await reopenCrawl(db, id, new Date());
     const deps = createCrawlDeps();
     let outcome = await runCrawl(id, deps);
     while (outcome.status === 'crawling') {
