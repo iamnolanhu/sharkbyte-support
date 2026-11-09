@@ -7,8 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "vitest run --no-file-parallelism",
-    "cleanup": "bunx tsx scripts/cleanup-do.ts"
+    "test": "vitest run --no-file-parallelism"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3",
