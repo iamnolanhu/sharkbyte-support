@@ -51,16 +51,25 @@ async function main(): Promise<void> {
     crawl,
     dryRun,
     onResult: (r) => {
-      const crawlPart = r.action === 'inserted' || r.action === 'replaced' ? ` | ${describeCrawl(r)}` : '';
+      const crawled = r.action === 'inserted' || r.action === 'replaced' || r.action === 'recrawled';
+      const crawlPart = crawled ? ` | ${describeCrawl(r)}` : '';
       console.log(`${r.domain} | ${r.id} | ${r.note ?? r.action}${crawlPart}`);
     },
   });
 
-  const totals: Record<ImportAction, number> = { inserted: 0, replaced: 0, exists: 0, conflict: 0 };
+  const totals: Record<ImportAction, number> = {
+    inserted: 0,
+    replaced: 0,
+    recrawled: 0,
+    exists: 0,
+    skipped: 0,
+    conflict: 0,
+  };
   for (const r of results) totals[r.action]++;
   const crawled = results.filter((r) => r.crawl);
   console.log(
-    `Totals: inserted ${totals.inserted}, replaced ${totals.replaced}, exists ${totals.exists}, conflict ${totals.conflict}` +
+    `Totals: inserted ${totals.inserted}, replaced ${totals.replaced}, recrawled ${totals.recrawled},` +
+      ` exists ${totals.exists}, skipped ${totals.skipped}, conflict ${totals.conflict}` +
       ` | crawled ${crawled.length} (ready ${crawled.filter((r) => r.crawl?.status === 'ready').length},` +
       ` failed ${crawled.filter((r) => r.crawl?.status === 'failed').length}),` +
       ` crawl errors ${results.filter((r) => r.crawlError).length}`,

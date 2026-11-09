@@ -164,11 +164,83 @@ export async function resetForCrawl(db: Db, id: string, now: Date): Promise<void
     { text: 'DELETE FROM chunks WHERE agent_id = $1', params: [id] },
     {
       text: `UPDATE agents SET status = 'crawling', pages_crawled = 0, pages_total = 0, chunk_count = 0,
-               last_error = NULL, crawl_started_at = $2
+               last_error = NULL, crawl_started_at = $2, crawl_pending = NULL, crawl_skipped = 0,
+               crawl_slices = 0, crawl_progress_at = $2
              WHERE id = $1`,
       params: [id, now],
     },
   ]);
+}
+
+/** Where an unfinished crawl stands, read at the start of each slice. */
+export interface CrawlState {
+  /** URLs still to read; null until discovery has run. */
+  pending: string[] | null;
+  pagesCrawled: number;
+  pagesTotal: number;
+  chunkCount: number;
+  pagesSkipped: number;
+  /** Slices run so far, this one included. */
+  slices: number;
+  crawlStartedAt: Date | null;
+}
+
+interface CrawlStateRow {
+  crawl_pending: string[] | null;
+  pages_crawled: number | string;
+  pages_total: number | string;
+  chunk_count: number | string;
+  crawl_skipped: number | string;
+  crawl_slices: number | string;
+  crawl_started_at: Date | string | null;
+}
+
+/** Counts a new slice of a `crawling` agent and returns its state; null when it is not crawling. */
+export async function beginCrawlSlice(db: Db, id: string, now: Date): Promise<CrawlState | null> {
+  if (!isUuid(id)) return null;
+  const rows = await db.query<CrawlStateRow>(
+    `UPDATE agents SET crawl_slices = crawl_slices + 1, crawl_progress_at = $2
+     WHERE id = $1 AND status = 'crawling'
+     RETURNING crawl_pending, pages_crawled, pages_total, chunk_count, crawl_skipped, crawl_slices, crawl_started_at`,
+    [id, now],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    pending: r.crawl_pending,
+    pagesCrawled: Number(r.pages_crawled),
+    pagesTotal: Number(r.pages_total),
+    chunkCount: Number(r.chunk_count),
+    pagesSkipped: Number(r.crawl_skipped),
+    slices: Number(r.crawl_slices),
+    crawlStartedAt: r.crawl_started_at === null ? null : toDate(r.crawl_started_at),
+  };
+}
+
+/** Stores the discovered URL list as the crawl's to-do list. */
+export async function saveDiscoveredUrls(db: Db, id: string, urls: readonly string[], now: Date): Promise<void> {
+  if (!isUuid(id)) return;
+  await db.query(
+    'UPDATE agents SET crawl_pending = $2::text[], pages_total = $3, crawl_progress_at = $4 WHERE id = $1',
+    [id, [...urls], urls.length, now],
+  );
+}
+
+/** Records one finished page (stored or given up on): off the to-do list, counters updated. */
+export async function recordCrawledPage(
+  db: Db,
+  id: string,
+  url: string,
+  p: { pagesCrawled: number; chunkCount: number; pagesSkipped: number },
+  now: Date,
+): Promise<void> {
+  if (!isUuid(id)) return;
+  await db.query(
+    `UPDATE agents SET crawl_pending = array_remove(crawl_pending, $2), pages_crawled = $3, chunk_count = $4,
+       crawl_skipped = $5, crawl_progress_at = $6
+     WHERE id = $1`,
+    [id, url, p.pagesCrawled, p.chunkCount, p.pagesSkipped, now],
+  );
 }
 
 export async function updateCrawlProgress(
@@ -189,7 +261,11 @@ export async function finishCrawl(
   r: { status: 'ready' | 'failed'; lastError: string | null },
 ): Promise<void> {
   if (!isUuid(id)) return;
-  await db.query('UPDATE agents SET status = $2, last_error = $3 WHERE id = $1', [id, r.status, r.lastError]);
+  await db.query('UPDATE agents SET status = $2, last_error = $3, crawl_pending = NULL WHERE id = $1', [
+    id,
+    r.status,
+    r.lastError,
+  ]);
 }
 
 export async function touchLastUsed(db: Db, id: string, now: Date): Promise<void> {

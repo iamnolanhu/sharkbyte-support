@@ -303,7 +303,7 @@ describe('POST /api/create-agent', () => {
       expect(await tryLockCrawl(db, agent.id, NOW, getLimits())).toBe(false);
     });
 
-    it('re-crawls a crawl that went stale', async () => {
+    it('continues an unfinished crawl when no slice is running', async () => {
       const row = await insertAgent(db, {
         domain: 'stale.example',
         url: 'https://stale.example/',

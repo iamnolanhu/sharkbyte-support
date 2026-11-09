@@ -6,7 +6,8 @@ export type ServerEvent =
   | 'llm_fallback'
   | 'llm_stream_error'
   | 'chat_completed'
-  | 'cron_sweep';
+  | 'cron_sweep'
+  | 'embedding_dims_migrated';
 
 const DEFAULT_DISTINCT_ID = 'sharkbyte-server';
 

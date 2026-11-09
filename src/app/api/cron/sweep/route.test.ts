@@ -45,10 +45,10 @@ describe('GET /api/cron/sweep', () => {
     const res = await call('Bearer test-cron-secret');
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toMatchObject({ success: true, staleCrawlsFailed: 0, agentsRemoved: 0, chunksAfter: 0 });
+    expect(body).toMatchObject({ success: true, stalledCrawlsFinished: 0, agentsRemoved: 0, chunksAfter: 0 });
     expect(captureServer).toHaveBeenCalledWith(
       'cron_sweep',
-      expect.objectContaining({ stale_crawls_failed: 0, agents_removed: 0, chunks: 0 }),
+      expect.objectContaining({ stalled_crawls_finished: 0, agents_removed: 0, chunks: 0 }),
     );
   });
 });

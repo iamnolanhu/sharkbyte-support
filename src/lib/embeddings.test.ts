@@ -35,6 +35,7 @@ const fetchMock = vi.fn<typeof fetch>();
 beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
+  vi.stubEnv('EMBEDDING_PROVIDER', 'nvidia');
   vi.stubEnv('NVIDIA_API_KEY', 'test-key');
 });
 

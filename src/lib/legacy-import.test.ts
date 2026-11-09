@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DEFAULT_INSTRUCTION, getLimits } from '@/lib/config';
 import type { Db } from '@/lib/db/client';
-import { getAgentByDomain, getAgentById, insertAgent, replaceUnownedWithId } from '@/lib/db/agents';
+import { finishCrawl, getAgentByDomain, getAgentById, insertAgent, replaceUnownedWithId } from '@/lib/db/agents';
 import { countAllChunks, insertChunksWithinCeiling } from '@/lib/db/chunks';
 import { releaseCrawlLock, tryLockCrawl } from '@/lib/crawl/start-crawl';
 import { runCrawl, type CrawlOutcome } from '@/lib/crawl/run-crawl';
@@ -130,7 +130,7 @@ describe('mapLegacyAgent', () => {
     expect(mapLegacyAgent(legacy({ uuid: ID_A, domain: 'a.example', createdAt: undefined }), NOW, limits).createdAt).toEqual(NOW);
   });
 
-  it('pins exactly the four demo domains', () => {
+  it('pins exactly the three demo domains', () => {
     const domains = [
       'sharkbyte-support.vercel.app',
       'sigmasynapses.com',
@@ -145,7 +145,6 @@ describe('mapLegacyAgent', () => {
       .sort();
     expect(pinned).toEqual([
       'dev.nolanhu.com',
-      'globelanguage.com',
       'sharkbyte-support.vercel.app',
       'sigmasynapses.com',
       'www.sigmasynapses.com',
@@ -243,6 +242,69 @@ describe('importLegacyAgents', () => {
     // Lock was released: it can be taken again.
     expect(await tryLockCrawl(db, ID_A, NOW, limits)).toBe(true);
     await releaseCrawlLock(db, ID_A);
+  });
+
+  it('never imports a domain on the skip list, even on a re-run', async () => {
+    const results = await importLegacyAgents(
+      db,
+      [
+        legacy({ uuid: ID_A, domain: 'globelanguage.com' }),
+        legacy({ uuid: ID_B, domain: 'aria.gov.uk' }),
+        legacy({ uuid: ID_C, domain: 'aria.org.uk' }),
+      ],
+      { ...opts, crawl: true },
+    );
+    expect(results.map((r) => [r.domain, r.action])).toEqual([
+      ['globelanguage.com', 'skipped'],
+      ['aria.gov.uk', 'skipped'],
+      ['aria.org.uk', 'inserted'],
+    ]);
+    expect(await getAgentById(db, ID_A)).toBeNull();
+    expect(await getAgentById(db, ID_B)).toBeNull();
+    expect(crawl).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-crawls an existing unowned failed row (after an embedding migration), slice after slice', async () => {
+    await importLegacyAgents(db, [legacy({ uuid: ID_A, domain: 'a.example' })], opts);
+    await insertChunksWithinCeiling(
+      db,
+      ID_A,
+      [{ url: 'https://a.example', title: 't', pos: 0, content: 'old', embedding: fakeEmbedding(1) }],
+      limits.maxTotalChunks,
+    );
+    await finishCrawl(db, ID_A, { status: 'failed', lastError: 're-embedding required' });
+    const statusesSeen: string[] = [];
+    crawl
+      .mockImplementationOnce(async (id) => {
+        statusesSeen.push(String((await getAgentById(db, id))?.status));
+        return { ...outcome, status: 'crawling' };
+      })
+      .mockImplementationOnce(async () => outcome);
+
+    const [r] = await importLegacyAgents(db, [legacy({ uuid: ID_A, domain: 'a.example' })], { ...opts, crawl: true });
+
+    expect(r).toMatchObject({ action: 'recrawled', crawl: outcome });
+    expect(crawl).toHaveBeenCalledTimes(2);
+    // Reset before the first slice: crawling again, old chunks gone.
+    expect(statusesSeen).toEqual(['crawling']);
+    expect(await countAllChunks(db)).toBe(0);
+    expect(await tryLockCrawl(db, ID_A, NOW, limits)).toBe(true);
+  });
+
+  it('leaves a ready row and an owned failed row alone', async () => {
+    await importLegacyAgents(db, [legacy({ uuid: ID_A, domain: 'a.example' }), legacy({ uuid: ID_B, domain: 'b.example' })], opts);
+    await finishCrawl(db, ID_A, { status: 'ready', lastError: null });
+    await finishCrawl(db, ID_B, { status: 'failed', lastError: 'x' });
+    await db.query(`UPDATE agents SET owner_token_hash = 'hash' WHERE id = $1`, [ID_B]);
+
+    const results = await importLegacyAgents(
+      db,
+      [legacy({ uuid: ID_A, domain: 'a.example' }), legacy({ uuid: ID_B, domain: 'b.example' })],
+      { ...opts, crawl: true },
+    );
+
+    expect(results.map((r) => r.action)).toEqual(['exists', 'exists']);
+    expect(crawl).not.toHaveBeenCalled();
   });
 
   it('releases the lock and records the error when a crawl throws', async () => {

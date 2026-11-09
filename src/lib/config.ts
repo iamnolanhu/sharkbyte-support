@@ -169,20 +169,64 @@ export const FIRECRAWL_CONFIG = {
   },
 } as const;
 
-// Embeddings (NVIDIA Build, OpenAI-compatible). Changing the model or dimensions means re-crawling every agent.
-export const EMBEDDING_CONFIG = {
-  baseUrl: 'https://integrate.api.nvidia.com/v1',
-  get model() {
-    return process.env.EMBEDDING_MODEL?.trim() || 'nvidia/nemotron-3.5-embed-1b';
+// Embeddings: Gemini (default, free tier) or NVIDIA Build. Changing the provider, model or
+// dimensions means re-embedding every agent; the schema does that by itself on a dimension change
+// (see src/lib/db/client.ts).
+export type EmbeddingProvider = 'gemini' | 'nvidia';
+
+interface EmbeddingDefaults {
+  baseUrl: string;
+  model: string;
+  dimensions: number;
+  batchSize: number;
+  maxBatchSize: number;
+}
+
+export const EMBEDDING_DEFAULTS: Readonly<Record<EmbeddingProvider, EmbeddingDefaults>> = {
+  // 768 is Gemini's recommended reduced (Matryoshka) size; vectors are L2-normalised client-side.
+  gemini: {
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    model: 'gemini-embedding-001',
+    dimensions: 768,
+    batchSize: 100,
+    maxBatchSize: 100,
   },
-  // Must match the halfvec(1024) column in the chunks table
-  dimensions: 1024,
   /**
-   * Inputs per request. Default 1: NVIDIA's hosted embedder fails most multi-input requests
-   * with HTTP 500 while single inputs succeed. Raise it (up to 32) once batches work again;
-   * a batch that gets a 5xx is split down to single inputs either way.
+   * Batch default 1: NVIDIA's hosted embedder fails most multi-input requests with HTTP 500
+   * while single inputs succeed; a batch that gets a 5xx is split down to single inputs either way.
    */
-  get batchSize() {
-    return Math.min(envInt(process.env, 'EMBEDDING_BATCH_SIZE', 1), 32);
+  nvidia: {
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    model: 'nvidia/nemotron-3.5-embed-1b',
+    dimensions: 1024,
+    batchSize: 1,
+    maxBatchSize: 32,
   },
-} as const;
+};
+
+/** pgvector's halfvec holds at most 4000 dimensions. */
+const MAX_HALFVEC_DIMS = 4000;
+
+export const EMBEDDING_CONFIG = {
+  /** `EMBEDDING_PROVIDER`: gemini (default) or nvidia. */
+  get provider(): EmbeddingProvider {
+    return process.env.EMBEDDING_PROVIDER?.trim().toLowerCase() === 'nvidia' ? 'nvidia' : 'gemini';
+  },
+  get baseUrl(): string {
+    return EMBEDDING_DEFAULTS[this.provider].baseUrl;
+  },
+  get model(): string {
+    return process.env.EMBEDDING_MODEL?.trim() || EMBEDDING_DEFAULTS[this.provider].model;
+  },
+  /** Must match the chunks.embedding halfvec column; a change re-embeds every agent. */
+  get dimensions(): number {
+    const fallback = EMBEDDING_DEFAULTS[this.provider].dimensions;
+    const dims = envInt(process.env, 'EMBEDDING_DIMS', fallback);
+    return dims <= MAX_HALFVEC_DIMS ? dims : fallback;
+  },
+  /** Inputs per request (`EMBEDDING_BATCH_SIZE`), capped at the provider's maximum. */
+  get batchSize(): number {
+    const d = EMBEDDING_DEFAULTS[this.provider];
+    return Math.min(envInt(process.env, 'EMBEDDING_BATCH_SIZE', d.batchSize), d.maxBatchSize);
+  },
+};

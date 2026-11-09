@@ -7,7 +7,7 @@ import { runInBackground } from '@/lib/background';
 import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
 import type { AgentRow } from '@/types';
 import { runCrawl, createCrawlDeps, type CrawlDeps } from './run-crawl';
-import { crawlIsStale, releaseCrawlLock, startLockedCrawl, tryLockCrawl } from './start-crawl';
+import { continueCrawl, releaseCrawlLock, startLockedCrawl, tryLockCrawl } from './start-crawl';
 
 vi.mock('@/lib/background', () => ({ runInBackground: vi.fn() }));
 vi.mock('@/lib/crawl/run-crawl', () => ({ runCrawl: vi.fn(), createCrawlDeps: vi.fn() }));
@@ -49,14 +49,28 @@ function capturedJob(): () => Promise<void> {
   return fn;
 }
 
-describe('crawlIsStale', () => {
-  it('only after maxDuration + 30 s', () => {
-    const crawling: AgentRow = { ...agent, status: 'crawling', crawlStartedAt: NOW };
-    const at = (ms: number) => new Date(NOW.getTime() + ms);
-    expect(crawlIsStale(crawling, at(TTL_MS), limits)).toBe(false);
-    expect(crawlIsStale(crawling, at(TTL_MS + 1), limits)).toBe(true);
-    expect(crawlIsStale({ ...crawling, status: 'ready' }, at(TTL_MS * 2), limits)).toBe(false);
-    expect(crawlIsStale({ ...crawling, crawlStartedAt: null }, at(TTL_MS * 2), limits)).toBe(false);
+describe('continueCrawl', () => {
+  it('starts the next slice of a crawling agent only when no slice holds the lock', async () => {
+    crawl.mockResolvedValue({ status: 'crawling' } as Awaited<ReturnType<typeof runCrawl>>);
+    expect(agent.status).toBe('crawling');
+
+    expect(await continueCrawl(db, agent, NOW, limits)).toBe(true);
+    expect(background).toHaveBeenCalledTimes(1);
+    // The slice holds the lock: a second poll starts nothing.
+    expect(await continueCrawl(db, agent, NOW, limits)).toBe(false);
+    expect(background).toHaveBeenCalledTimes(1);
+
+    await capturedJob()();
+    expect(crawl).toHaveBeenCalledWith(agent.id, expect.anything());
+    // Lock released after the slice: the next poll continues.
+    expect(await continueCrawl(db, agent, NOW, limits)).toBe(true);
+  });
+
+  it('does nothing for an agent that is not crawling', async () => {
+    expect(await continueCrawl(db, { ...agent, status: 'ready' }, NOW, limits)).toBe(false);
+    expect(await continueCrawl(db, { ...agent, status: 'failed' }, NOW, limits)).toBe(false);
+    expect(background).not.toHaveBeenCalled();
+    expect(await tryLockCrawl(db, agent.id, NOW, limits)).toBe(true);
   });
 });
 

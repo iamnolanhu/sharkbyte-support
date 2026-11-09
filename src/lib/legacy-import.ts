@@ -14,6 +14,7 @@ import {
   insertAgentWithId,
   isUuid,
   replaceUnownedWithId,
+  resetForCrawl,
   type AgentWithIdInput,
 } from '@/lib/db/agents';
 import { ensureCapacity } from '@/lib/sweep';
@@ -33,9 +34,14 @@ export interface LegacyAgent {
 const PINNED_DOMAINS: ReadonlySet<string> = new Set([
   'sharkbyte-support.vercel.app',
   'sigmasynapses.com',
-  'globelanguage.com',
   'dev.nolanhu.com',
 ]);
+
+/**
+ * Domains (by `domainKey`) the import never creates, so a re-run cannot bring them back:
+ * globelanguage.com was deleted on purpose; aria.gov.uk failed on DigitalOcean and here.
+ */
+export const SKIP_DOMAINS: ReadonlySet<string> = new Set(['globelanguage.com', 'aria.gov.uk']);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -92,7 +98,8 @@ export function mapLegacyAgent(agent: LegacyAgent, now: Date, limits: Limits): A
   };
 }
 
-export type ImportAction = 'inserted' | 'replaced' | 'exists' | 'conflict';
+/** `recrawled`: the row already existed, unowned and `failed` (e.g. after an embedding migration), and was crawled again. */
+export type ImportAction = 'inserted' | 'replaced' | 'recrawled' | 'exists' | 'skipped' | 'conflict';
 
 export interface ImportResult {
   id: string;
@@ -129,7 +136,15 @@ async function place(
   dryRun: boolean,
   guard: () => Promise<string | null>,
 ): Promise<{ action: ImportAction; note?: string; wrote: boolean; stopped?: string }> {
-  if (await getAgentById(db, input.id)) return { action: 'exists', wrote: false };
+  if (SKIP_DOMAINS.has(input.domain)) return { action: 'skipped', note: 'skipped: on the skip list', wrote: false };
+  const existing = await getAgentById(db, input.id);
+  if (existing) {
+    if (existing.status !== 'failed' || existing.ownerTokenHash) return { action: 'exists', wrote: false };
+    if (dryRun) return { action: 'recrawled', wrote: false };
+    const refusal = await guard();
+    if (refusal) return { action: 'conflict', wrote: false, stopped: refusal };
+    return { action: 'recrawled', wrote: true };
+  }
   const sameDomain = await getAgentByDomain(db, input.domain);
   if (sameDomain?.ownerTokenHash) {
     return { action: 'conflict', note: 'conflict: owned row kept', wrote: false };
@@ -143,12 +158,22 @@ async function place(
   return { action: sameDomain ? 'replaced' : 'inserted', wrote: true };
 }
 
-async function crawlLocked(db: Db, id: string, opts: ImportOptions): Promise<Pick<ImportResult, 'crawl' | 'crawlError'>> {
+/** Crawls to the end, slice after slice (an operator run has no function time limit). */
+async function crawlLocked(
+  db: Db,
+  id: string,
+  opts: ImportOptions,
+  reset: boolean,
+): Promise<Pick<ImportResult, 'crawl' | 'crawlError'>> {
   if (!(await tryLockCrawl(db, id, opts.now, opts.limits))) {
     return { crawl: null, crawlError: 'another crawl already holds the lock' };
   }
   try {
-    return { crawl: await runCrawl(id, createCrawlDeps()) };
+    if (reset) await resetForCrawl(db, id, new Date());
+    const deps = createCrawlDeps();
+    let outcome = await runCrawl(id, deps);
+    while (outcome.status === 'crawling') outcome = await runCrawl(id, deps);
+    return { crawl: outcome };
   } catch (err) {
     return { crawl: null, crawlError: err instanceof Error ? err.message : String(err) };
   } finally {
@@ -177,7 +202,9 @@ export async function importLegacyAgents(
     const placed = await place(db, input, opts.dryRun === true, guard);
     if (placed.stopped) return { results, stopped: placed.stopped };
     const result: ImportResult = { id: input.id, domain: input.domain, action: placed.action, note: placed.note, crawl: null };
-    if (placed.wrote && opts.crawl) Object.assign(result, await crawlLocked(db, input.id, opts));
+    if (placed.wrote && opts.crawl) {
+      Object.assign(result, await crawlLocked(db, input.id, opts, placed.action === 'recrawled'));
+    }
     results.push(result);
     opts.onResult?.(result);
   }

@@ -8,7 +8,7 @@ import type { ScrapeResult } from '@/lib/firecrawl';
 import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
 import type { EmbedFn } from '@/lib/embeddings';
 import type { Fetcher } from './discover';
-import { runCrawl, type CrawlDeps } from './run-crawl';
+import { MAX_CRAWL_SLICES, runCrawl, type CrawlDeps } from './run-crawl';
 
 const NOW = new Date('2026-11-05T10:00:00.000Z');
 const CAPACITY_COPY = 'The free demo is full right now — try again tomorrow';
@@ -166,26 +166,118 @@ describe('runCrawl', () => {
     expect((await storedChunks(id)).map((r) => r.pos)).toEqual([0, 1, 2, 3]);
   });
 
-  it('stops at the time budget', async () => {
-    const id = await newAgent('slow.example');
-    let clock = NOW.getTime();
-    const limits = testLimits({ pageFetchConcurrency: 1 });
-    // The first page's embedding call takes the crawl past its deadline.
-    const embed: EmbedFn = async (texts, inputType) => {
-      clock += limits.crawlMaxDurationS * 1000;
-      return fakeEmbed(texts, inputType);
-    };
-    const deps = makeDeps({
-      fetcher: siteFetcher('slow.example', { '/': 1, '/a': 1, '/b': 1 }),
-      embed,
-      now: () => clock,
-      limits,
+  describe('slices', () => {
+    /** An embedder that sleeps: a few real ms, and 100 s on the crawl's clock per call. */
+    function sleepyEmbedder(clock: { t: number }): EmbedFn {
+      return async (texts, inputType) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        clock.t += 100_000;
+        return fakeEmbed(texts, inputType);
+      };
+    }
+
+    async function pending(agentId: string): Promise<string[] | null> {
+      const rows = await db.query<{ crawl_pending: string[] | null }>('SELECT crawl_pending FROM agents WHERE id = $1', [
+        agentId,
+      ]);
+      return rows[0]?.crawl_pending ?? null;
+    }
+
+    function countingSite(domain: string, pageCount: number): { fetcher: Fetcher; discoveries: () => number } {
+      const pages = Object.fromEntries(Array.from({ length: pageCount }, (_, i) => [i === 0 ? '/' : `/p${i}`, 1]));
+      const site = siteFetcher(domain, pages);
+      let sitemapFetches = 0;
+      const fetcher: Fetcher = async (url, accept) => {
+        if (accept === 'xml') sitemapFetches++;
+        return site(url, accept);
+      };
+      return { fetcher, discoveries: () => sitemapFetches };
+    }
+
+    it('stops a slice at its time budget and later slices finish the remaining pages', async () => {
+      const id = await newAgent('slow.example');
+      const clock = { t: NOW.getTime() };
+      const site = countingSite('slow.example', 7);
+      const deps = makeDeps({
+        fetcher: site.fetcher,
+        embed: sleepyEmbedder(clock),
+        now: () => clock.t,
+        limits: testLimits({ pageFetchConcurrency: 1 }),
+      });
+
+      // Pages start at 0, 100 and 200 s; at 300 s the 240 s slice budget is spent.
+      const first = await runCrawl(id, deps);
+
+      expect(first).toMatchObject({ status: 'crawling', pagesCrawled: 3, pagesTotal: 7, chunkCount: 3 });
+      expect(await getAgentById(db, id)).toMatchObject({ status: 'crawling', pagesCrawled: 3, pagesTotal: 7, chunkCount: 3 });
+      expect(await pending(id)).toHaveLength(4);
+      expect(deps.capture).not.toHaveBeenCalled();
+
+      expect(await runCrawl(id, deps)).toMatchObject({ status: 'crawling', pagesCrawled: 6 });
+      const last = await runCrawl(id, deps);
+
+      expect(last).toMatchObject({ status: 'ready', pagesCrawled: 7, pagesTotal: 7, chunkCount: 7 });
+      expect(last.seconds).toBe(700);
+      expect(await getAgentById(db, id)).toMatchObject({ status: 'ready', chunkCount: 7, lastError: null });
+      expect(await pending(id)).toBeNull();
+      expect(site.discoveries()).toBe(1);
+      expect((await storedChunks(id)).map((r) => r.pos)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect(deps.capture).toHaveBeenCalledTimes(1);
+      expect(deps.capture.mock.calls[0]?.[1]).toMatchObject({ status: 'ready', pages: 7, chunks: 7 });
     });
 
-    const outcome = await runCrawl(id, deps);
+    it('concurrent pages across slices: every page stored once, positions contiguous', async () => {
+      const id = await newAgent('busy.example');
+      const clock = { t: NOW.getTime() };
+      const site = countingSite('busy.example', 20);
+      const deps = makeDeps({ fetcher: site.fetcher, embed: sleepyEmbedder(clock), now: () => clock.t });
 
-    expect(outcome).toMatchObject({ status: 'ready', pagesCrawled: 1, pagesTotal: 3, chunkCount: 1 });
-    expect(outcome.seconds).toBe(limits.crawlMaxDurationS);
+      let outcome = await runCrawl(id, deps);
+      let slices = 1;
+      expect(outcome.status).toBe('crawling');
+      while (outcome.status === 'crawling') {
+        outcome = await runCrawl(id, deps);
+        slices++;
+      }
+
+      expect(outcome).toMatchObject({ status: 'ready', pagesCrawled: 20, pagesTotal: 20, chunkCount: 20 });
+      expect(slices).toBeGreaterThan(1);
+      expect(slices).toBeLessThanOrEqual(MAX_CRAWL_SLICES);
+      expect(site.discoveries()).toBe(1);
+      const rows = await storedChunks(id);
+      expect(rows.map((r) => r.pos)).toEqual(Array.from({ length: 20 }, (_, i) => i));
+      expect(new Set(rows.map((r) => r.content)).size).toBe(20);
+    });
+
+    it('a crawl out of slices finishes with what it stored', async () => {
+      const id = await newAgent('stuck.example');
+      const clock = { t: NOW.getTime() };
+      const deps = makeDeps({
+        fetcher: siteFetcher('stuck.example', { '/': 1, '/a': 1, '/b': 1, '/c': 1, '/d': 1 }),
+        embed: sleepyEmbedder(clock),
+        now: () => clock.t,
+        limits: testLimits({ pageFetchConcurrency: 1 }),
+      });
+      expect((await runCrawl(id, deps)).status).toBe('crawling');
+      await db.query('UPDATE agents SET crawl_slices = $2 WHERE id = $1', [id, MAX_CRAWL_SLICES]);
+
+      const outcome = await runCrawl(id, deps);
+
+      expect(outcome).toMatchObject({ status: 'ready', pagesCrawled: 3, pagesTotal: 5, chunkCount: 3 });
+      expect(await pending(id)).toBeNull();
+    });
+
+    it('a slice for an agent that is no longer crawling does nothing', async () => {
+      const id = await newAgent('done.example');
+      await db.query(`UPDATE agents SET status = 'ready' WHERE id = $1`, [id]);
+      const embed = vi.fn<EmbedFn>(fakeEmbed);
+
+      const outcome = await runCrawl(id, makeDeps({ fetcher: siteFetcher('done.example', { '/': 1 }), embed }));
+
+      expect(outcome.status).toBe('ready');
+      expect(embed).not.toHaveBeenCalled();
+      expect(await countAllChunks(db)).toBe(0);
+    });
   });
 
   it('uses Firecrawl only for thin pages and only when allowed', async () => {

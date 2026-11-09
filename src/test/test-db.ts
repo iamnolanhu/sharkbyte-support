@@ -1,8 +1,9 @@
 import { PGlite, type PGliteInterface } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite-pgvector';
+import { EMBEDDING_CONFIG } from '@/lib/config';
 import { applySchema, type Db, type SqlStatement } from '@/lib/db/client';
 
-function wrap(pg: PGliteInterface): Db {
+export function wrap(pg: PGliteInterface): Db {
   return {
     async query<T extends object>(text: string, params?: readonly unknown[]): Promise<T[]> {
       const result = await pg.query<T>(text, params ? [...params] : undefined);
@@ -40,13 +41,19 @@ export async function createTestDb(): Promise<Db> {
 /** Timeout for a hook that calls createTestDb (the first call boots PGlite); TEST_DB_TIMEOUT_MS raises it on a loaded machine. */
 export const TEST_DB_TIMEOUT_MS = Number(process.env.TEST_DB_TIMEOUT_MS) || 30_000;
 
-export const EMBEDDING_DIMS = 1024;
+/** The configured embedding size (768 for the default Gemini provider). */
+export const EMBEDDING_DIMS = EMBEDDING_CONFIG.dimensions;
 
-/** Deterministic unit vector of 1024 floats from a seeded LCG. */
-export function fakeEmbedding(seed: number): number[] {
+/** A fresh PGlite with pgvector and no schema (for schema and migration tests). */
+export async function createEmptyTestDb(): Promise<Db> {
+  return wrap(new PGlite({ extensions: { vector } }));
+}
+
+/** Deterministic unit vector of `dims` floats from a seeded LCG. */
+export function fakeEmbedding(seed: number, dims: number = EMBEDDING_DIMS): number[] {
   let state = (seed * 2654435761 + 1) >>> 0;
   const v: number[] = [];
-  for (let i = 0; i < EMBEDDING_DIMS; i++) {
+  for (let i = 0; i < dims; i++) {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
     v.push(state / 0x100000000 - 0.5);
   }

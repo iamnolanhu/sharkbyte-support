@@ -1,11 +1,23 @@
 /**
  * The crawl pipeline for one agent: discover → safe fetch → extract → chunk → embed → insert,
- * bounded by the per-agent chunk cap, the global chunk ceiling and the function's time budget.
+ * bounded by the per-agent chunk cap and the global chunk ceiling.
+ *
+ * A crawl runs in slices, one per function invocation: free-tier embeddings (about 30k tokens a
+ * minute) can need longer than one maxDuration. The to-do list of URLs lives on the agent row,
+ * so each slice reads pages until its time budget is spent and leaves the agent `crawling`;
+ * the next slice (started by a status poll, see `continueCrawl`) picks up the remaining URLs.
  */
 
 import { captureServer } from '@/lib/analytics/server';
 import { FIRECRAWL_CONFIG, getLimits, type Limits } from '@/lib/config';
-import { finishCrawl, getAgentById, updateCrawlProgress } from '@/lib/db/agents';
+import {
+  beginCrawlSlice,
+  finishCrawl,
+  getAgentById,
+  recordCrawledPage,
+  saveDiscoveredUrls,
+  updateCrawlProgress,
+} from '@/lib/db/agents';
 import { chunksTableBytes, insertChunksWithinCeiling } from '@/lib/db/chunks';
 import { getDb, type Db } from '@/lib/db/client';
 import { embedTexts, type EmbedFn } from '@/lib/embeddings';
@@ -29,7 +41,8 @@ export interface CrawlDeps {
 }
 
 export interface CrawlOutcome {
-  status: 'ready' | 'failed';
+  /** `crawling`: this slice ran out of time with pages left; another slice continues it. */
+  status: 'ready' | 'failed' | 'crawling';
   pagesCrawled: number;
   pagesTotal: number;
   chunkCount: number;
@@ -41,10 +54,12 @@ export const UNREADABLE_COPY =
 export const CRAWL_ERROR_COPY =
   'Sammy got caught in a riptide while reading this site — hit Repair to try again.';
 
-/** Seconds kept free before the function's maxDuration to finish up and report. */
-const FINISH_MARGIN_S = 20;
+/** A slice starts no new page this close to maxDuration (240 s of a 300 s invocation). */
+const SLICE_STOP_MARGIN_S = 60;
 /** Embedding calls still in flight are aborted this long before maxDuration, so the finish always runs. */
 const EMBED_STOP_MARGIN_S = 10;
+/** A crawl still unfinished after this many slices keeps what it has (guards against a page that kills every slice). */
+export const MAX_CRAWL_SLICES = 6;
 
 interface PageText {
   title: string;
@@ -65,24 +80,29 @@ async function readPage(url: string, deps: CrawlDeps): Promise<PageText | null> 
   return { title: page.title, text: page.text };
 }
 
+/** Runs one slice of the agent's crawl; a no-op when the agent is not `crawling`. */
 export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlOutcome> {
   const { db, limits } = deps;
   const start = deps.now();
-  const deadline = start + (limits.crawlMaxDurationS - FINISH_MARGIN_S) * 1000;
+  const deadline = start + (limits.crawlMaxDurationS - SLICE_STOP_MARGIN_S) * 1000;
   // Pages only start before `deadline`; this also stops a page's embeddings that run past it.
   const embedSignal = AbortSignal.timeout((limits.crawlMaxDurationS - EMBED_STOP_MARGIN_S) * 1000);
 
   let pagesTotal = 0;
   let pagesCrawled = 0;
   let chunkCount = 0;
+  let pagesSkipped = 0;
+  let pending: string[] = [];
+  let crawlStart = start;
   /** Stop taking new pages (time budget or a full agent); pages in flight still finish. */
   let stopped = false;
   /** No room left (per-agent cap or global ceiling): in-flight pages are dropped. */
   let full = false;
   let ceilingReached = false;
+  /** Out of slices: finish with what is stored. */
+  let exhausted = false;
   /** A crawl-level failure (the agent or discovery); a failed page is only skipped. */
   let failure: unknown = null;
-  let pagesSkipped = 0;
 
   // Inserts and progress updates run one at a time, so `pos` and the per-agent cap stay exact.
   let writeQueue: Promise<void> = Promise.resolve();
@@ -90,6 +110,11 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
     const run = writeQueue.then(task);
     writeQueue = run.catch(() => undefined);
     return run;
+  };
+
+  const markDone = async (url: string) => {
+    pending = pending.filter((u) => u !== url);
+    await recordCrawledPage(db, agentId, url, { pagesCrawled, chunkCount, pagesSkipped }, new Date(deps.now()));
   };
 
   const storePage = (url: string, page: PageText | null, chunks: string[], vectors: number[][]) =>
@@ -111,7 +136,13 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
         full = true;
         stopped = true;
       }
-      await updateCrawlProgress(db, agentId, { pagesCrawled, pagesTotal, chunkCount });
+      await markDone(url);
+    });
+
+  const skipPage = (url: string) =>
+    serialized(async () => {
+      pagesSkipped += 1;
+      await markDone(url);
     });
 
   const crawlPage = async (url: string): Promise<void> => {
@@ -128,34 +159,63 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
   try {
     const agent = await getAgentById(db, agentId);
     if (!agent) throw new Error('Agent not found');
-    const urls = await discoverUrls(new URL(agent.url), deps.fetcher, limits.maxPagesPerAgent);
-    pagesTotal = urls.length;
-    await updateCrawlProgress(db, agentId, { pagesCrawled, pagesTotal, chunkCount });
+    const state = await beginCrawlSlice(db, agentId, new Date(start));
+    if (!state) {
+      // Finished (or reset) between the caller's check and this slice.
+      return {
+        status: agent.status,
+        pagesCrawled: agent.pagesCrawled,
+        pagesTotal: agent.pagesTotal,
+        chunkCount: agent.chunkCount,
+        seconds: 0,
+      };
+    }
+    ({ pagesCrawled, pagesTotal, chunkCount, pagesSkipped } = state);
+    crawlStart = state.crawlStartedAt?.getTime() ?? start;
+    if (state.pending === null) {
+      pending = await discoverUrls(new URL(agent.url), deps.fetcher, limits.maxPagesPerAgent);
+      pagesTotal = pending.length;
+      await saveDiscoveredUrls(db, agentId, pending, new Date(deps.now()));
+    } else {
+      pending = state.pending;
+    }
+    if (state.slices > MAX_CRAWL_SLICES) exhausted = true;
 
+    const queue = exhausted ? [] : [...pending];
     let next = 0;
     const worker = async (): Promise<void> => {
-      while (!stopped && next < urls.length) {
+      while (!stopped && next < queue.length) {
         if (deps.now() >= deadline) {
           stopped = true;
           break;
         }
-        const url = urls[next++];
+        const url = queue[next++];
         try {
           await crawlPage(url);
         } catch (err) {
+          // A page cut off by the end of the slice stays on the to-do list for the next one.
+          if (embedSignal.aborted) continue;
           // One bad page (a fetch error, an embedding 5xx/429) must not sink the pages already stored.
-          pagesSkipped += 1;
           console.error(`[crawl] ${agentId} skipped a page:`, err instanceof Error ? err.message : 'unknown error');
+          await skipPage(url);
         }
       }
     };
-    const workers = Math.max(1, Math.min(limits.pageFetchConcurrency, urls.length));
+    const workers = Math.max(1, Math.min(limits.pageFetchConcurrency, queue.length));
     await Promise.all(Array.from({ length: workers }, worker));
+    await writeQueue;
   } catch (err) {
     failure ??= err;
   }
 
-  let status: CrawlOutcome['status'];
+  const seconds = Math.round((deps.now() - crawlStart) / 1000);
+  const finished = failure !== null || full || exhausted || pending.length === 0;
+  if (!finished) {
+    // Out of time with pages left: stay `crawling` for the next slice.
+    return { status: 'crawling', pagesCrawled, pagesTotal, chunkCount, seconds };
+  }
+
+  let status: 'ready' | 'failed';
   let lastError: string | null = null;
   if (failure !== null) {
     status = 'failed';
@@ -173,11 +233,10 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
     await updateCrawlProgress(db, agentId, { pagesCrawled, pagesTotal, chunkCount });
     await finishCrawl(db, agentId, { status, lastError });
   } catch (err) {
-    // The row stays `crawling`; agent-status treats a stale crawl as failed.
+    // The row stays `crawling`; the next status poll resumes it and the sweep is the backstop.
     console.error(`[crawl] ${agentId} could not record its result:`, err instanceof Error ? err.message : err);
   }
 
-  const seconds = Math.round((deps.now() - start) / 1000);
   let dbBytes: number | null = null;
   try {
     dbBytes = await chunksTableBytes(db);
@@ -200,7 +259,7 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
   return { status, pagesCrawled, pagesTotal, chunkCount, seconds };
 }
 
-/** Production wiring: guarded fetches, NVIDIA embeddings, Firecrawl when configured and under its daily rail. */
+/** Production wiring: guarded fetches, the configured embeddings provider, Firecrawl when configured and under its daily rail. */
 export function createCrawlDeps(): CrawlDeps {
   const db = getDb();
   const limits = getLimits();

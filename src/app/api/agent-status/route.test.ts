@@ -3,16 +3,22 @@ import { APP_DOMAIN } from '@/lib/config';
 import { setDbForTests, type Db } from '@/lib/db/client';
 import { finishCrawl, getAgentById, insertAgent, updateCrawlProgress } from '@/lib/db/agents';
 import { COPY } from '@/lib/agent-api';
+import { runInBackground } from '@/lib/background';
+import { tryLockCrawl } from '@/lib/crawl/start-crawl';
+import { getLimits } from '@/lib/config';
 import { createTestDb, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
 import type { AgentRow, AgentStatusResponse, ApiErrorBody } from '@/types';
-import { GET } from './route';
+import { GET, maxDuration } from './route';
+
+vi.mock('@/lib/background', () => ({ runInBackground: vi.fn() }));
+vi.mock('@/lib/crawl/run-crawl', () => ({ runCrawl: vi.fn(), createCrawlDeps: vi.fn() }));
 
 const NOW = new Date('2026-11-05T10:15:00.000Z');
-const STALE_COPY = 'Sammy ran out of air mid-dive — press Repair to try again.';
 
 let db: Db;
 
 beforeEach(async () => {
+  vi.mocked(runInBackground).mockReset();
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
   db = await createTestDb();
@@ -58,23 +64,26 @@ describe('GET /api/agent-status', () => {
     });
   });
 
-  it('marks a stale crawl failed', async () => {
-    const agent = await makeAgent(new Date(NOW.getTime() - 331_000));
-    const res = await status(`?agentId=${agent.id}`);
-    const body = (await res.json()) as AgentStatusResponse;
-    expect(body.status).toBe('failed');
-    expect(body.error).toBe(STALE_COPY);
-    expect(body.message).toBe(STALE_COPY);
-    const row = await getAgentById(db, agent.id);
-    expect(row?.status).toBe('failed');
-    expect(row?.lastError).toBe(STALE_COPY);
-  });
-
-  it('leaves a crawl inside its time budget alone', async () => {
-    const agent = await makeAgent(new Date(NOW.getTime() - 300_000));
+  it('a poll starts the next crawl slice when none is running', async () => {
+    const agent = await makeAgent(new Date(NOW.getTime() - 600_000));
     const body = (await (await status(`?agentId=${agent.id}`)).json()) as AgentStatusResponse;
     expect(body.status).toBe('crawling');
+    expect(runInBackground).toHaveBeenCalledTimes(1);
+    // The slice now holds the crawl lock.
+    expect(await tryLockCrawl(db, agent.id, NOW, getLimits())).toBe(false);
+  });
+
+  it('a poll while a slice runs starts nothing', async () => {
+    const agent = await makeAgent(NOW);
+    expect(await tryLockCrawl(db, agent.id, NOW, getLimits())).toBe(true);
+    const body = (await (await status(`?agentId=${agent.id}`)).json()) as AgentStatusResponse;
+    expect(body.status).toBe('crawling');
+    expect(runInBackground).not.toHaveBeenCalled();
     expect((await getAgentById(db, agent.id))?.status).toBe('crawling');
+  });
+
+  it('maxDuration fits a crawl slice', () => {
+    expect(maxDuration).toBe(getLimits().crawlMaxDurationS);
   });
 
   it('reports ready and failed agents', async () => {

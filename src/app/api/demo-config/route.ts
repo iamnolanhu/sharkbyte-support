@@ -3,7 +3,7 @@ import { getDb, type Db } from '@/lib/db/client';
 import { getAgentByDomain, insertAgent, pinAgent } from '@/lib/db/agents';
 import { incrementQuota } from '@/lib/db/quota';
 import { domainKey } from '@/lib/crawl/url-guard';
-import { failStaleCrawl, releaseCrawlLock, startCrawlOrRelease, tryLockCrawl } from '@/lib/crawl/start-crawl';
+import { continueCrawl, releaseCrawlLock, startCrawlOrRelease, tryLockCrawl } from '@/lib/crawl/start-crawl';
 import { ensureCapacity } from '@/lib/sweep';
 import { rateLimited } from '@/lib/agent-api';
 import type { AgentRow, DemoConfigResponse } from '@/types';
@@ -95,6 +95,6 @@ export async function GET() {
     await pinAgent(db, agent.id);
     agent = { ...agent, pinned: true, ownerTokenHash: null };
   }
-  agent = await failStaleCrawl(db, agent, now, limits);
+  await continueCrawl(db, agent, now, limits);
   return agent.status === 'failed' ? revive(db, agent, now, limits) : config(agent);
 }

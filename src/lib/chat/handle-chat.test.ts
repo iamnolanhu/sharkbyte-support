@@ -206,6 +206,26 @@ describe('handleChat', () => {
     expect(embedTexts).not.toHaveBeenCalled();
   });
 
+  it('retrieves the agent\'s top 6 chunks at the configured embedding size', async () => {
+    const agent = await makeAgent('reef.example');
+    const other = await makeAgent('other.example');
+    const chunk = (i: number) => ({ url: `${CHUNK_URL}#${i}`, title: `Fin ${i}`, pos: i, content: `Fin fact ${i}.`, embedding: fakeEmbedding(i + 1) });
+    await insertChunksWithinCeiling(db, agent.id, Array.from({ length: 10 }, (_, i) => chunk(i)), LIMITS.maxTotalChunks);
+    await insertChunksWithinCeiling(db, other.id, [chunk(99)], LIMITS.maxTotalChunks);
+    expect(fakeEmbedding(1)).toHaveLength(768);
+    const model = useModel(answerParts('Sharks love docs'));
+
+    const res = await handleChat({ agentId: agent.id, raw: body([userMessage('Tell me about fins')]), ip: IP });
+    await res.text();
+
+    const system = String(model.doStreamCalls[0]?.prompt.find((m) => m.role === 'system')?.content);
+    const cited = Array.from({ length: 10 }, (_, i) => i).filter((i) => system.includes(`${CHUNK_URL}#${i}`));
+    expect(cited).toHaveLength(6);
+    // The closest chunk (same seed as the question's vector) is always among them.
+    expect(cited).toContain(0);
+    expect(system).not.toContain('Fin fact 99.');
+  });
+
   it('streams an answer grounded in retrieved chunks', async () => {
     const agent = await makeAgent('reef.example');
     await insertChunksWithinCeiling(

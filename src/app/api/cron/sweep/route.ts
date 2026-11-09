@@ -20,7 +20,7 @@ export async function GET(request: Request) {
   }
   const result = await sweep(getDb(), new Date(), getLimits());
   await captureServer('cron_sweep', {
-    stale_crawls_failed: result.staleCrawlsFailed,
+    stalled_crawls_finished: result.stalledCrawlsFinished,
     agents_removed: result.agentsRemoved,
     chunks: result.chunksAfter,
     db_bytes: result.dbBytes,

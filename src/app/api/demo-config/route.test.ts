@@ -133,7 +133,7 @@ describe('GET /api/demo-config', () => {
     expect(background).toHaveBeenCalledTimes(1);
   });
 
-  it('treats a stale demo crawl as failed and re-crawls it', async () => {
+  it('continues an unfinished demo crawl when no slice is running', async () => {
     await demo();
     await finishScheduledCrawls();
     vi.setSystemTime(new Date(NOW.getTime() + 331_000));

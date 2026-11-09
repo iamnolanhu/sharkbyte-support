@@ -4,7 +4,7 @@ import { deleteAgent, getAgentByDomain, insertAgent } from '@/lib/db/agents';
 import { acquireLock, releaseLock } from '@/lib/db/quota';
 import { assertPublicUrl, domainKey, normalizeSubmittedUrl, UnsafeUrlError } from '@/lib/crawl/url-guard';
 import {
-  failStaleCrawl,
+  continueCrawl,
   recrawlWithRails,
   releaseCrawlLock,
   startCrawlOrRelease,
@@ -67,7 +67,9 @@ export async function POST(request: Request) {
   const ip = getClientIp(request.headers);
   const found = await getAgentByDomain(db, domain);
   if (found) {
-    const existing = await failStaleCrawl(db, found, now, limits);
+    // An unfinished crawl with no slice running picks up where it stopped.
+    await continueCrawl(db, found, now, limits);
+    const existing = found;
     if (existing.status !== 'failed' || existing.pinned) return agentResponse(existing);
     // Anyone may retry a failed Sammy, under the same rails as repair; its owner stays as it was.
     const result = await recrawlWithRails(db, existing.id, ip, now, limits);

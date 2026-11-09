@@ -5,7 +5,7 @@ import { chunksTableBytes, countAllChunks } from '@/lib/db/chunks';
 import { deleteExpiredLocks, deleteExpiredQuota } from '@/lib/db/quota';
 
 export interface SweepResult {
-  staleCrawlsFailed: number;
+  stalledCrawlsFinished: number;
   agentsRemoved: number;
   chunksAfter: number;
   dbBytes: number;
@@ -13,16 +13,24 @@ export interface SweepResult {
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
-/** Grace past the crawl's own time limit before an unfinished crawl counts as abandoned. */
+/** Grace past one slice's time limit before a crawl with no progress counts as stalled. */
 const STALE_CRAWL_GRACE_S = 30;
 
 export const STALE_CRAWL_ERROR = 'Sammy ran out of air mid-dive — press Repair to try again.';
 
-async function failAbandonedCrawls(db: Db, now: Date, limits: Limits): Promise<number> {
+/**
+ * Finishes crawls that made no progress for a slice's time limit plus grace (nobody polled to
+ * start the next slice, or slices kept dying): `ready` with the pages stored so far, or
+ * `failed` when nothing was stored.
+ */
+async function finishStalledCrawls(db: Db, now: Date, limits: Limits): Promise<number> {
   const cutoff = new Date(now.getTime() - (limits.crawlMaxDurationS + STALE_CRAWL_GRACE_S) * 1000);
   const rows = await db.query<{ id: string }>(
-    `UPDATE agents SET status = 'failed', last_error = $2
-     WHERE status = 'crawling' AND crawl_started_at < $1
+    `UPDATE agents
+     SET status = CASE WHEN chunk_count > 0 THEN 'ready' ELSE 'failed' END,
+         last_error = CASE WHEN chunk_count > 0 THEN NULL ELSE $2 END,
+         crawl_pending = NULL
+     WHERE status = 'crawling' AND COALESCE(crawl_progress_at, crawl_started_at) < $1
      RETURNING id`,
     [cutoff, STALE_CRAWL_ERROR],
   );
@@ -68,7 +76,7 @@ async function evictOldestAgent(db: Db): Promise<boolean> {
  * or pinned agent in the retention and eviction steps.
  */
 export async function sweep(db: Db, now: Date, limits: Limits): Promise<SweepResult> {
-  const staleCrawlsFailed = await failAbandonedCrawls(db, now, limits);
+  const stalledCrawlsFinished = await finishStalledCrawls(db, now, limits);
   await clearFailedChunks(db);
 
   let agentsRemoved = await deleteIdleAgents(
@@ -92,7 +100,7 @@ export async function sweep(db: Db, now: Date, limits: Limits): Promise<SweepRes
   await deleteExpiredLocks(db, now);
 
   return {
-    staleCrawlsFailed,
+    stalledCrawlsFinished,
     agentsRemoved,
     chunksAfter: await countAllChunks(db),
     dbBytes: await chunksTableBytes(db),

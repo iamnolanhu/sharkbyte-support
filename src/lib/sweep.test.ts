@@ -23,6 +23,7 @@ interface SeedOptions {
   chunks?: number;
   lastUsedAgoMs?: number;
   crawlStartedAgoMs?: number;
+  progressAgoMs?: number;
   status?: 'crawling' | 'ready' | 'failed';
   pinned?: boolean;
 }
@@ -68,6 +69,12 @@ async function seed(domain: string, o: SeedOptions = {}): Promise<string> {
       new Date(NOW.getTime() - o.crawlStartedAgoMs),
     ]);
   }
+  if (o.progressAgoMs !== undefined) {
+    await db.query('UPDATE agents SET crawl_progress_at = $2 WHERE id = $1', [
+      row.id,
+      new Date(NOW.getTime() - o.progressAgoMs),
+    ]);
+  }
   return row.id;
 }
 
@@ -83,24 +90,26 @@ describe('sweep', () => {
     expect(await countAllChunks(db)).toBe(2);
   });
 
-  it('fails abandoned crawls and clears their chunks', async () => {
-    const stale = await seed('stale.test', {
-      status: 'crawling',
-      crawlStartedAgoMs: (limits.crawlMaxDurationS + 31) * 1000,
-      chunks: 5,
-    });
+  it('finishes stalled crawls with what they stored, and fails the empty ones', async () => {
+    const stalledMs = (limits.crawlMaxDurationS + 31) * 1000;
+    const withPages = await seed('stalled.test', { status: 'crawling', crawlStartedAgoMs: stalledMs, chunks: 5 });
+    await seed('empty.test', { status: 'crawling', crawlStartedAgoMs: stalledMs });
     await seed('fresh.test', { status: 'crawling', crawlStartedAgoMs: 10_000, chunks: 3 });
+    // Started long ago, but its last slice made progress recently: not stalled.
+    await seed('sliced.test', { status: 'crawling', crawlStartedAgoMs: 3 * stalledMs, progressAgoMs: 10_000, chunks: 2 });
     const result = await sweep(db, NOW, limits);
-    expect(result.staleCrawlsFailed).toBe(1);
-    const staleRow = await getAgentByDomain(db, 'stale.test');
-    expect(staleRow?.id).toBe(stale);
-    expect(staleRow?.status).toBe('failed');
-    expect(staleRow?.chunkCount).toBe(0);
-    expect(staleRow?.lastError).toBe('Sammy ran out of air mid-dive — press Repair to try again.');
-    const freshRow = await getAgentByDomain(db, 'fresh.test');
-    expect(freshRow?.status).toBe('crawling');
-    expect(freshRow?.chunkCount).toBe(3);
-    expect(await countAllChunks(db)).toBe(3);
+    expect(result.stalledCrawlsFinished).toBe(2);
+    const stalledRow = await getAgentByDomain(db, 'stalled.test');
+    expect(stalledRow?.id).toBe(withPages);
+    expect(stalledRow?.status).toBe('ready');
+    expect(stalledRow?.chunkCount).toBe(5);
+    expect(stalledRow?.lastError).toBeNull();
+    const emptyRow = await getAgentByDomain(db, 'empty.test');
+    expect(emptyRow?.status).toBe('failed');
+    expect(emptyRow?.lastError).toBe('Sammy ran out of air mid-dive — press Repair to try again.');
+    expect((await getAgentByDomain(db, 'fresh.test'))?.status).toBe('crawling');
+    expect((await getAgentByDomain(db, 'sliced.test'))?.status).toBe('crawling');
+    expect(await countAllChunks(db)).toBe(10);
   });
 
   it('deletes failed agents unused for a day', async () => {

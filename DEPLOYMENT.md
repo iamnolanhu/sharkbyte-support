@@ -1,6 +1,6 @@
 # Deployment Guide
 
-SharkByte Support runs on free tiers: Vercel (Hobby), Neon Postgres with pgvector, NVIDIA Build
+SharkByte Support runs on free tiers: Vercel (Hobby), Neon Postgres with pgvector, Google Gemini
 embeddings, and a chain of free LLM providers. This guide covers setup, every environment
 variable, the free-tier rails that keep a public demo inside those quotas, and troubleshooting.
 
@@ -13,8 +13,8 @@ variable, the free-tier rails that keep a public demo inside those quotas, and t
 1. Click the button and create the project.
 2. **Database:** in the project's Storage tab, add **Neon** from the Vercel Marketplace. It sets
    `DATABASE_URL` for every environment. Any Postgres with the `vector` extension works too.
-3. **Keys:** add `NVIDIA_API_KEY` (required: embeddings, and the last LLM in the chain). For a
-   faster chain add `CEREBRAS_API_KEY` and/or `OPENROUTER_API_KEY`.
+3. **Keys:** add `GEMINI_API_KEY` (required: embeddings; a free key from Google AI Studio) and at
+   least one LLM key: `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY` and/or `NVIDIA_API_KEY`.
 4. **Optional:** `CRON_SECRET` (protects the daily sweep), `FIRECRAWL_API_KEY`, and the PostHog keys.
 5. Redeploy. The schema (tables and the `vector` extension) creates itself on the first request.
 
@@ -22,7 +22,7 @@ variable, the free-tier rails that keep a public demo inside those quotas, and t
 
 ```bash
 bun install
-cp .env.example .env.local   # fill in DATABASE_URL and NVIDIA_API_KEY at minimum
+cp .env.example .env.local   # fill in DATABASE_URL, GEMINI_API_KEY and one LLM key at minimum
 bun run dev
 bun run test                 # unit tests (in-memory Postgres, no network database)
 ```
@@ -37,7 +37,8 @@ PostHog project key is the only public one.
 | Variable | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | yes | | Postgres connection string (pgvector) |
-| `NVIDIA_API_KEY` | yes | | Embeddings, and the NVIDIA step of the LLM chain |
+| `GEMINI_API_KEY` | yes | | Gemini API key for embeddings (free tier) |
+| `NVIDIA_API_KEY` | no | | NVIDIA step of the LLM chain; embeddings when `EMBEDDING_PROVIDER=nvidia` |
 | `CEREBRAS_API_KEY` | no | | Cerebras step of the LLM chain |
 | `OPENROUTER_API_KEY` | no | | OpenRouter step of the LLM chain (free models) |
 | `OPENROUTER_MODEL` | no | `google/gemma-4-31b-it:free` | OpenRouter model id |
@@ -45,8 +46,10 @@ PostHog project key is the only public one.
 | `LLM_FIRST_BYTE_TIMEOUT_MS` | no | `8000` | Wait for a provider's first token before falling back |
 | `LLM_MODEL` | no | `gpt-oss-120b` | Cerebras model id |
 | `NVIDIA_LLM_MODEL` | no | `nvidia/nemotron-3.5-lightning-30b-a3b` | NVIDIA chat model id |
-| `EMBEDDING_MODEL` | no | `nvidia/nemotron-3.5-embed-1b` | NVIDIA embedding model (1024 dimensions); changing it means re-crawling every agent |
-| `EMBEDDING_BATCH_SIZE` | no | `1` | Inputs per embeddings request (up to 32); a batch that gets a 5xx is split down to single inputs |
+| `EMBEDDING_PROVIDER` | no | `gemini` | `gemini` or `nvidia` |
+| `EMBEDDING_MODEL` | no | `gemini-embedding-001` (nvidia: `nvidia/nemotron-3.5-embed-1b`) | Embedding model; changing it means re-crawling every agent |
+| `EMBEDDING_DIMS` | no | `768` (nvidia: `1024`) | Vector size stored in `chunks.embedding` (up to 4000); a change re-embeds everything, see below |
+| `EMBEDDING_BATCH_SIZE` | no | `100` (nvidia: `1`) | Inputs per embeddings request (Gemini up to 100, NVIDIA up to 32) |
 | `FIRECRAWL_API_KEY` | no | | Firecrawl for JavaScript-rendered pages |
 | `APP_DOMAIN` | no | Vercel production URL | Public domain used in copy and the demo agent |
 | `CRON_SECRET` | no | | Bearer secret for `/api/cron/sweep`; without it the sweep refuses every call |
@@ -61,7 +64,7 @@ PostHog project key is the only public one.
 | `NEXT_PUBLIC_POSTHOG_KEY` | no | | Browser PostHog: pageviews, autocapture and session replay on the site and inside the embed widget |
 | `NEXT_PUBLIC_POSTHOG_HOST` | no | `https://us.i.posthog.com` | Browser PostHog host |
 
-At least one LLM key must be set; `NVIDIA_API_KEY` counts, since it is required anyway.
+At least one LLM key must be set: `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY` or `NVIDIA_API_KEY`.
 
 **Model ids go stale.** NVIDIA and Cerebras retire hosted models. An HTTP 410 in the logs ("has
 reached its end of life") means the id is gone, and a 404 "Function not found for account" means
@@ -73,9 +76,25 @@ it isn't served to your key. Pick a live id from the provider's `/v1/models` lis
 and Nemotron models `chat_template_kwargs: { enable_thinking: false }`; with thinking on, a
 Nemotron model can spend the whole budget thinking and send no answer.
 
-**Embedding batches.** NVIDIA's hosted embedder fails most requests that carry more than one
-input (HTTP 500) while single inputs succeed, so `EMBEDDING_BATCH_SIZE` defaults to 1. Raise it
-once batches work again; a batch that still fails is split in halves down to single inputs.
+**Embeddings.** Gemini's free tier allows about 100 requests a minute, 30,000 tokens a minute
+and 1,000 requests a day per Google Cloud project. Requests therefore carry at most 100 inputs
+and about 20,000 estimated tokens; a 429 waits (Google's `retryDelay` when it sends one) and
+tries again; a batch that fails any other way is retried one input at a time. Vectors are
+requested at `EMBEDDING_DIMS` and L2-normalised. On NVIDIA (`EMBEDDING_PROVIDER=nvidia`),
+`EMBEDDING_BATCH_SIZE` defaults to 1 because its hosted embedder fails most multi-input
+requests with HTTP 500; a batch that still fails is split in halves down to single inputs.
+
+**Changing the embedding size.** On the first request after a deploy, the schema compares
+`chunks.embedding` with `EMBEDDING_DIMS`. On a mismatch it empties `chunks`, resizes the column,
+marks every agent that is not crawling `failed` with "re-embedding required", and sends the
+server event `embedding_dims_migrated`. Owners re-crawl with **Repair** (anyone can by
+submitting the URL again); `scripts/import-legacy-agents.ts` re-crawls the unowned imported ones.
+
+**Crawls run in slices.** At about 30,000 tokens a minute a large site needs longer than one
+function invocation, so each invocation starts new pages for 240 s, saves the URLs still to read
+on the agent row and leaves it `crawling`. The next status poll (the home page and dashboard
+poll every few seconds) starts the next slice when none is running. A crawl ends `ready` with
+what it stored after 6 slices.
 
 **OpenRouter and Zero Data Retention:** OpenRouter's free models refuse accounts that enforce
 Zero Data Retention. Either allow non-ZDR providers for the key you use here, or drop
@@ -128,7 +147,8 @@ free-tier key: the rail limits calls, but the key's own plan is the real spendin
 `Authorization: Bearer <CRON_SECRET>`; set `CRON_SECRET` in the project so the call is accepted.
 The sweep:
 
-- marks crawls that outlived the function time limit as failed (the owner can press Repair);
+- finishes crawls with no progress for the function time limit plus 30 s (nobody polled to
+  start the next slice): `ready` with what they stored, or `failed` when they stored nothing;
 - clears the chunks of failed agents and removes failed agents after 24 hours;
 - removes agents unused for 14 days;
 - while storage is above 80 % of `MAX_TOTAL_CHUNKS`, evicts the least recently used agents;
@@ -155,8 +175,9 @@ if your database has room.
 
 ### An agent is stuck on "crawling"
 
-A crawl stops at the function time limit. The daily sweep marks an abandoned crawl as failed;
-the owner (the browser that created the agent) can then press **Repair** on the agent's page
+A crawl continues slice by slice while someone has the agent's page open. Left alone, the
+daily sweep finishes it with what it stored, or marks it failed when it stored nothing; the
+owner (the browser that created the agent) can then press **Repair** on the agent's page
 to crawl the site again. Anyone can also retry a failed agent by submitting its URL again; that
 crawl counts against the same hourly and daily caps.
 
