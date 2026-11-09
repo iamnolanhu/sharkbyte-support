@@ -9,9 +9,15 @@ export const APP_DOMAIN = process.env.APP_DOMAIN
   || process.env.VERCEL_PROJECT_PRODUCTION_URL
   || 'sharkbyte-support.vercel.app';
 
-// Default system instruction for a new Sammy
+// Default system instruction for a new Sammy. How Sammy talks (voice, length, what to do when the
+// site does not cover a question) lives in the chat scaffold, buildSystemPrompt in handle-chat.ts.
 export function DEFAULT_INSTRUCTION(domain: string): string {
-  return `You are Sammy, a friendly and knowledgeable customer support agent for ${domain}.
+  return `You are Sammy, the friendly support agent for ${domain}. You help visitors with questions about ${domain} and what we offer.`;
+}
+
+/** The DigitalOcean-era default instruction: HEAD, then the domain, then TAIL. */
+const LEGACY_INSTRUCTION_HEAD = 'You are Sammy, a friendly and knowledgeable customer support agent for ';
+const LEGACY_INSTRUCTION_TAIL = `.
 
 Guidelines:
 - Answer questions using ONLY the provided website content and knowledge base
@@ -19,6 +25,21 @@ Guidelines:
 - Be helpful, concise, and friendly in your responses
 - Use a conversational tone while remaining professional
 - If asked about topics outside the knowledge base, politely redirect to relevant topics you can help with`;
+
+/** The default instruction every DigitalOcean-era Sammy was created with. */
+export function LEGACY_DEFAULT_INSTRUCTION(domain: string): string {
+  return `${LEGACY_INSTRUCTION_HEAD}${domain}${LEGACY_INSTRUCTION_TAIL}`;
+}
+
+/**
+ * The current default for an instruction that is still the untouched DigitalOcean-era default
+ * (any domain); null for anything else, so an owner's own edits are never replaced.
+ */
+export function upgradeLegacyInstruction(instruction: string): string | null {
+  const text = instruction.replace(/\r\n/g, '\n').trim();
+  if (!text.startsWith(LEGACY_INSTRUCTION_HEAD) || !text.endsWith(LEGACY_INSTRUCTION_TAIL)) return null;
+  const domain = text.slice(LEGACY_INSTRUCTION_HEAD.length, text.length - LEGACY_INSTRUCTION_TAIL.length);
+  return /^[^\s]+$/.test(domain) ? DEFAULT_INSTRUCTION(domain) : null;
 }
 
 // Free-tier limits: quotas, crawl bounds, chat bounds and retention

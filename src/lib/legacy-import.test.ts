@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DEFAULT_INSTRUCTION, getLimits } from '@/lib/config';
+import { DEFAULT_INSTRUCTION, getLimits, LEGACY_DEFAULT_INSTRUCTION } from '@/lib/config';
 import type { Db } from '@/lib/db/client';
 import { finishCrawl, getAgentByDomain, getAgentById, insertAgent, replaceUnownedWithId } from '@/lib/db/agents';
 import { countAllChunks, insertChunksWithinCeiling } from '@/lib/db/chunks';
@@ -124,6 +124,15 @@ describe('mapLegacyAgent', () => {
   it('falls back to https://<domain> without a knowledge base', () => {
     const m = mapLegacyAgent(legacy({ uuid: ID_A, domain: 'tide.example', baseUrl: undefined }), NOW, limits);
     expect(m.url).toBe('https://tide.example/');
+  });
+
+  it('moves the DigitalOcean-era default instruction to the current default', () => {
+    const mapped = mapLegacyAgent(
+      legacy({ uuid: ID_A, domain: 'tide.example', instruction: LEGACY_DEFAULT_INSTRUCTION('tide.example') }),
+      NOW,
+      limits,
+    );
+    expect(mapped.instruction).toBe(DEFAULT_INSTRUCTION('tide.example'));
   });
 
   it('uses the default instruction when empty and caps long ones', () => {

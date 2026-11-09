@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_INSTRUCTION, envInt, getLimits } from '@/lib/config';
+import { DEFAULT_INSTRUCTION, envInt, getLimits, LEGACY_DEFAULT_INSTRUCTION, upgradeLegacyInstruction } from '@/lib/config';
 
 describe('getLimits', () => {
   it('getLimits uses spec defaults', () => {
@@ -40,8 +40,26 @@ describe('envInt', () => {
 });
 
 describe('DEFAULT_INSTRUCTION', () => {
-  it('names Sammy and the domain', () => {
+  it('names Sammy and the domain, with no canned replies or source talk', () => {
     const text = DEFAULT_INSTRUCTION('example.com');
-    expect(text.startsWith('You are Sammy, a friendly and knowledgeable customer support agent for example.com.')).toBe(true);
+    expect(text.startsWith('You are Sammy, the friendly support agent for example.com.')).toBe(true);
+    expect(text).not.toMatch(/rephrase|provided|knowledge base|ONLY/i);
+  });
+});
+
+describe('upgradeLegacyInstruction', () => {
+  it('moves the untouched DigitalOcean-era default to the current default for its domain', () => {
+    expect(upgradeLegacyInstruction(LEGACY_DEFAULT_INSTRUCTION('aria.org.uk'))).toBe(DEFAULT_INSTRUCTION('aria.org.uk'));
+    const crlf = LEGACY_DEFAULT_INSTRUCTION('reef.example').replace(/\n/g, '\r\n');
+    expect(upgradeLegacyInstruction(`  ${crlf}\n`)).toBe(DEFAULT_INSTRUCTION('reef.example'));
+  });
+
+  it('leaves any edited or custom instruction alone', () => {
+    const legacy = LEGACY_DEFAULT_INSTRUCTION('reef.example');
+    expect(upgradeLegacyInstruction(`${legacy}\n- Always mention our sale`)).toBeNull();
+    expect(upgradeLegacyInstruction(legacy.replace('concise', 'brief'))).toBeNull();
+    expect(upgradeLegacyInstruction(LEGACY_DEFAULT_INSTRUCTION('reef example'))).toBeNull();
+    expect(upgradeLegacyInstruction('Talk like a pirate.')).toBeNull();
+    expect(upgradeLegacyInstruction(DEFAULT_INSTRUCTION('reef.example'))).toBeNull();
   });
 });

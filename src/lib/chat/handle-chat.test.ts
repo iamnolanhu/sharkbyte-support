@@ -3,7 +3,7 @@ import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { MockLanguageModelV4 } from 'ai/test';
 import { captureServer } from '@/lib/analytics/server';
 import { COPY } from '@/lib/agent-api';
-import { APP_DOMAIN, getLimits } from '@/lib/config';
+import { APP_DOMAIN, DEFAULT_INSTRUCTION, getLimits } from '@/lib/config';
 import { setDbForTests, type Db } from '@/lib/db/client';
 import { finishCrawl, getAgentById, insertAgent } from '@/lib/db/agents';
 import { insertChunksWithinCeiling } from '@/lib/db/chunks';
@@ -16,7 +16,7 @@ import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db'
 import type { AgentRow } from '@/types';
 import { POST as chatPost } from '@/app/api/chat/route';
 import { OPTIONS as widgetOptions, POST as widgetPost } from '@/app/api/widget/[agentId]/route';
-import { buildSystemPrompt, handleChat, parseChatRequest } from './handle-chat';
+import { buildSystemPrompt, handleChat, parseChatRequest, VOICE_GUIDE } from './handle-chat';
 
 vi.mock('@/lib/analytics/server');
 vi.mock('@/lib/embeddings', () => ({ embedTexts: vi.fn() }));
@@ -151,16 +151,53 @@ describe('parseChatRequest', () => {
 });
 
 describe('buildSystemPrompt', () => {
-  it('lists each chunk with its title and url under the instruction', () => {
-    const prompt = buildSystemPrompt('Be Sammy.', [
-      { url: 'https://a.example/1', title: 'One', content: 'first body', score: 0.9 },
-      { url: 'https://a.example/2', title: 'Two', content: 'second body', score: 0.8 },
-    ]);
+  const pages = [
+    { url: 'https://a.example/1', title: 'One', content: 'first body', score: 0.9 },
+    { url: 'https://a.example/2', title: 'Two', content: 'second body', score: 0.8 },
+  ];
+
+  it('puts the instruction first, then the voice guide, then each page with its title and link', () => {
+    const prompt = buildSystemPrompt('Be Sammy.', pages);
     expect(prompt).toBe(
-      'Be Sammy.\n\nWebsite content (cite the page URL when you use it):\n\n' +
-        '[1] One — https://a.example/1\nfirst body\n\n' +
-        '[2] Two — https://a.example/2\nsecond body',
+      `Be Sammy.\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n` +
+        '## One\nLink: https://a.example/1\nfirst body\n\n' +
+        '## Two\nLink: https://a.example/2\nsecond body',
     );
+  });
+
+  it('says plainly when nothing matched', () => {
+    expect(buildSystemPrompt('Be Sammy.', [])).toBe(`Be Sammy.\n\n${VOICE_GUIDE}\n\nWhat you know:\n\nNothing that matches this question.`);
+  });
+
+  it('has none of the words that make Sammy hedge or talk about its sources', () => {
+    const prompt = buildSystemPrompt(DEFAULT_INSTRUCTION('reef.example'), pages).toLowerCase();
+    for (const banned of [
+      /according to/,
+      /based on/,
+      /provided/,
+      /the website (states|says)/,
+      /\bcite\b/,
+      /context/,
+      /chunk/,
+      /document/,
+      /retriev/,
+      /\bsources?\b/,
+      /knowledge base/,
+      /rephrase/,
+      /[—–]/,
+    ]) {
+      expect(prompt, String(banned)).not.toMatch(banned);
+    }
+  });
+
+  it('speaks for the site and explains what to do when it does not know', () => {
+    expect(VOICE_GUIDE).toContain('"we", "our" and "us"');
+    expect(VOICE_GUIDE).toContain('2-4 short sentences');
+    expect(VOICE_GUIDE).toContain('When what you know does not cover the question, say so plainly');
+    expect(VOICE_GUIDE).toContain('how to reach the team');
+    expect(VOICE_GUIDE).toContain('Never make up facts');
+    expect(VOICE_GUIDE).toContain('Share a link only when the visitor asks');
+    expect(VOICE_GUIDE).toContain('Never use em dashes or en dashes');
   });
 });
 
@@ -225,6 +262,28 @@ describe('handleChat', () => {
     // The closest chunk (same seed as the question's vector) is always among them.
     expect(cited).toContain(0);
     expect(system).not.toContain('Fin fact 99.');
+  });
+
+  it('rewrites em and en dashes in the streamed answer, even split across deltas', async () => {
+    const agent = await makeAgent('reef.example');
+    useModel([
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 't' },
+      { type: 'text-delta', id: 't', delta: 'We build agents ' },
+      { type: 'text-delta', id: 't', delta: '— they answer calls' },
+      { type: 'text-delta', id: 't', delta: ' –' },
+      { type: 'text-end', id: 't' },
+      { type: 'finish', usage: USAGE, finishReason: { unified: 'stop', raw: 'stop' } },
+    ]);
+    const res = await handleChat({ agentId: agent.id, raw: body([userMessage('What do you do?')]), ip: IP });
+    const deltas = (await res.text())
+      .split('\n')
+      .filter((line) => line.startsWith('data: {'))
+      .map((line) => JSON.parse(line.slice(6)) as { type: string; delta?: string })
+      .filter((event) => event.type === 'text-delta')
+      .map((event) => event.delta)
+      .join('');
+    expect(deltas).toBe('We build agents, they answer calls.');
   });
 
   it('streams an answer grounded in retrieved chunks', async () => {

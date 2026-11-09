@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 import { captureServer } from '@/lib/analytics/server';
 import { EMBEDDING_CONFIG, type EnvVars } from '@/lib/config';
+import { upgradeLegacyInstructions } from './agents';
 import { EMBEDDING_DIMS_PROBE, embeddingDimsMigration, schemaStatements } from './schema';
 
 export interface SqlStatement {
@@ -126,14 +127,30 @@ function createNeonDb(connectionString: string): Db {
   };
 }
 
+/** Moves agents off the DigitalOcean-era default instruction; a failure only logs (next cold start retries). */
+async function upgradeInstructions(db: Db): Promise<void> {
+  try {
+    const changed = await upgradeLegacyInstructions(db);
+    if (changed > 0) console.warn(`[db] ${changed} agents moved from the old default instruction to the new one`);
+  } catch (error) {
+    console.error('[db] Could not upgrade old default instructions', error);
+  }
+}
+
 /** Wraps a Db so the first query in the process waits for the schema. */
 function withSchema(raw: Db): Db {
   let ready: Promise<void> | null = null;
   const ensureSchema = (): Promise<void> => {
-    ready ??= applySchema(raw).then(reportDimsChange, (err: unknown) => {
-      ready = null; // let the next request retry
-      throw err;
-    });
+    ready ??= applySchema(raw).then(
+      async (change) => {
+        await reportDimsChange(change);
+        await upgradeInstructions(raw);
+      },
+      (err: unknown) => {
+        ready = null; // let the next request retry
+        throw err;
+      },
+    );
     return ready;
   };
   return {

@@ -12,7 +12,9 @@ import {
   touchLastUsed,
   updateCrawlProgress,
   updateInstruction,
+  upgradeLegacyInstructions,
 } from '@/lib/db/agents';
+import { DEFAULT_INSTRUCTION, LEGACY_DEFAULT_INSTRUCTION } from '@/lib/config';
 import { countAllChunks, insertChunksWithinCeiling } from '@/lib/db/chunks';
 import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
 import type { AgentRow, ChunkInput } from '@/types';
@@ -149,5 +151,22 @@ describe('agents repository', () => {
     expect(await getAgentById(db, a.id)).toBeNull();
     expect(await countAllChunks(db)).toBe(2);
     expect(await getAgentById(db, other.id)).not.toBeNull();
+  });
+});
+
+describe('upgradeLegacyInstructions', () => {
+  it('replaces only untouched DigitalOcean-era defaults, once', async () => {
+    const legacy = await newAgent('aria.org.uk');
+    const edited = await newAgent('reef.example');
+    const custom = await newAgent('tide.example');
+    await updateInstruction(db, legacy.id, LEGACY_DEFAULT_INSTRUCTION('aria.org.uk'));
+    const editedText = `${LEGACY_DEFAULT_INSTRUCTION('reef.example')}\n- Mention the spring sale`;
+    await updateInstruction(db, edited.id, editedText);
+
+    expect(await upgradeLegacyInstructions(db)).toBe(1);
+    expect((await getAgentById(db, legacy.id))?.instruction).toBe(DEFAULT_INSTRUCTION('aria.org.uk'));
+    expect((await getAgentById(db, edited.id))?.instruction).toBe(editedText);
+    expect((await getAgentById(db, custom.id))?.instruction).toBe('Be nice.');
+    expect(await upgradeLegacyInstructions(db)).toBe(0);
   });
 });

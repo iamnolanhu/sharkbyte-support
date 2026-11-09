@@ -95,7 +95,7 @@ describe('buildChain', () => {
     expect(withKey[1]?.model?.modelId).toBe('gemini-3.5-flash-lite');
   });
 
-  it('gemini calls the OpenAI-compatible endpoint with its key and a low thinking budget', async () => {
+  it('gemini calls the OpenAI-compatible endpoint with its key and a minimal thinking budget', async () => {
     const calls: { url: string; headers: Headers; body: Record<string, unknown> }[] = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       calls.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
@@ -111,7 +111,7 @@ describe('buildChain', () => {
 
     expect(calls[0]?.url).toBe('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
     expect(calls[0]?.headers.get('Authorization')).toBe('Bearer g-test');
-    expect(calls[0]?.body).toMatchObject({ model: 'gemini-3.5-flash-lite', reasoning_effort: 'low', max_tokens: 600 });
+    expect(calls[0]?.body).toMatchObject({ model: 'gemini-3.5-flash-lite', reasoning_effort: 'minimal', max_tokens: 600 });
   });
 
   it('keeps reasoning models inside the answer budget', async () => {
@@ -153,11 +153,12 @@ describe('buildChain', () => {
       chat_template_kwargs: { enable_thinking: false },
     });
     expect(reasoningFields('google/gemma-4-31b-it:free')).toEqual({});
-    // Gemini 2.5 Flash can switch thinking off; 2.5 Pro and Gemini 3 cannot, so they think low.
+    // Gemini 2.5 Flash can switch thinking off; later Flash models think minimal, Pro models low.
     expect(reasoningFields('gemini-2.5-flash')).toEqual({ reasoning_effort: 'none' });
     expect(reasoningFields('gemini-2.5-flash-lite')).toEqual({ reasoning_effort: 'none' });
     expect(reasoningFields('gemini-2.5-pro')).toEqual({ reasoning_effort: 'low' });
-    expect(reasoningFields('gemini-3.5-flash-lite')).toEqual({ reasoning_effort: 'low' });
+    expect(reasoningFields('gemini-3.5-flash-lite')).toEqual({ reasoning_effort: 'minimal' });
+    expect(reasoningFields('gemini-3-pro')).toEqual({ reasoning_effort: 'low' });
   });
 
   it('uses each provider base URL and model', async () => {

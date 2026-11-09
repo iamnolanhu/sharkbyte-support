@@ -3,7 +3,7 @@
  * original ids so old embed snippets and links keep resolving. The CLI is `scripts/import-legacy-agents.ts`.
  */
 
-import { DEFAULT_INSTRUCTION, type Limits } from '@/lib/config';
+import { DEFAULT_INSTRUCTION, type Limits, upgradeLegacyInstruction } from '@/lib/config';
 import { createCrawlDeps, runCrawl, type CrawlOutcome } from '@/lib/crawl/run-crawl';
 import { releaseCrawlLock, renewCrawlLock, tryLockCrawl } from '@/lib/crawl/start-crawl';
 import { domainKey, normalizeSubmittedUrl } from '@/lib/crawl/url-guard';
@@ -86,8 +86,9 @@ export function mapLegacyAgent(agent: LegacyAgent, now: Date, limits: Limits): A
   const url = normalizeSubmittedUrl(agent.baseUrl?.trim() || `https://${agent.domain.trim()}`);
   const domain = domainKey(url);
   const created = agent.createdAt ? new Date(agent.createdAt) : null;
-  const instruction = agent.instruction?.trim()
-    ? agent.instruction.slice(0, limits.maxInstructionChars)
+  const exported = agent.instruction?.trim();
+  const instruction = exported
+    ? (upgradeLegacyInstruction(exported) ?? exported.slice(0, limits.maxInstructionChars))
     : DEFAULT_INSTRUCTION(domain);
   return {
     id: agent.uuid,

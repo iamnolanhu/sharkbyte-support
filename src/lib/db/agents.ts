@@ -1,3 +1,4 @@
+import { upgradeLegacyInstruction } from '@/lib/config';
 import type { AgentRow, AgentStatus } from '@/types';
 import type { Db } from './client';
 
@@ -151,6 +152,28 @@ export async function getAgentByDomain(db: Db, domain: string): Promise<AgentRow
 export async function updateInstruction(db: Db, id: string, instruction: string): Promise<void> {
   if (!isUuid(id)) return;
   await db.query('UPDATE agents SET instruction = $2 WHERE id = $1', [id, instruction]);
+}
+
+/**
+ * Moves every agent still on the untouched DigitalOcean-era default instruction to the current
+ * default; owner-edited instructions stay as they are. Idempotent: returns how many rows changed.
+ */
+export async function upgradeLegacyInstructions(db: Db): Promise<number> {
+  const rows = await db.query<{ id: string; instruction: string }>(
+    `SELECT id, instruction FROM agents WHERE instruction LIKE '%Could you rephrase your question?%'`,
+  );
+  let changed = 0;
+  for (const row of rows) {
+    const next = upgradeLegacyInstruction(row.instruction);
+    if (!next) continue;
+    // Only if nobody edited it in the meantime.
+    const updated = await db.query<{ id: string }>(
+      'UPDATE agents SET instruction = $2 WHERE id = $1 AND instruction = $3 RETURNING id',
+      [row.id, next, row.instruction],
+    );
+    changed += updated.length;
+  }
+  return changed;
 }
 
 /** Deletes the agent; its chunks go with it (ON DELETE CASCADE). */

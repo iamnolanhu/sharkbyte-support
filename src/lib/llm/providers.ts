@@ -52,13 +52,15 @@ export function providerBaseUrl(name: ProviderName): string {
  * Request fields that keep a reasoning model's thinking out of the way: answers get 600 output
  * tokens and the first text must arrive within the first-byte timeout. Nemotron models think by
  * default and can spend the whole budget doing it, so thinking is switched off; gpt-oss models
- * reason at low effort. Gemini 2.5 Flash models switch thinking off with reasoning_effort "none";
- * other Gemini models (2.5 Pro, 3) cannot, so they think at "low".
+ * reason at low effort. Gemini 2.5 Flash models switch thinking off with reasoning_effort "none".
+ * Later Flash models cannot, so they think at "minimal": at "low", gemini-3.5-flash-lite spent
+ * 450-570 of the 600 tokens thinking and cut replies off mid-sentence. Pro models think at "low".
  */
 export function reasoningFields(modelId: string): Record<string, unknown> {
   if (modelId.includes('nemotron')) return { chat_template_kwargs: { enable_thinking: false } };
   if (modelId.includes('gpt-oss')) return { reasoning_effort: 'low' };
   if (modelId.startsWith('gemini-2.5') && !modelId.includes('pro')) return { reasoning_effort: 'none' };
+  if (modelId.startsWith('gemini') && modelId.includes('flash')) return { reasoning_effort: 'minimal' };
   if (modelId.startsWith('gemini')) return { reasoning_effort: 'low' };
   return {};
 }

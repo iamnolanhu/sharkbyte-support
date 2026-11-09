@@ -80,8 +80,9 @@ it isn't served to your key. Pick a live id from the provider's `/v1/models` lis
 `LLM_FIRST_BYTE_TIMEOUT_MS`. The chain therefore sends gpt-oss models `reasoning_effort: "low"`
 and Nemotron models `chat_template_kwargs: { enable_thinking: false }`; with thinking on, a
 Nemotron model can spend the whole budget thinking and send no answer. Gemini 2.5 Flash models get
-`reasoning_effort: "none"`, and other Gemini models (2.5 Pro, 3.x, which cannot turn thinking
-off) get `"low"`.
+`reasoning_effort: "none"`. Later Flash models cannot turn thinking off, so they get `"minimal"`
+(at `"low"`, gemini-3.5-flash-lite spent most of the 600 tokens thinking and cut replies off);
+Pro models get `"low"`.
 
 **Embeddings.** Gemini's free tier allows about 100 requests a minute, 30,000 tokens a minute
 and 1,000 requests a day per Google Cloud project. Requests therefore carry at most 100 inputs

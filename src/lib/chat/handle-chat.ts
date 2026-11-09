@@ -21,6 +21,7 @@ import {
   type ChatEventInput,
   type ChatRequestMeta,
 } from '@/lib/chat/chat-event';
+import { createDashFilter } from '@/lib/chat/dash-filter';
 import { addChatTokens, checkChatTokenBudget, checkRail, embedRequestGate, RAIL_COPY } from '@/lib/rails';
 import type { RetrievedChunk } from '@/types';
 
@@ -79,9 +80,34 @@ export function parseChatRequest(raw: string, limits: Limits): ParsedChatRequest
   return { ok: true, turns: kept };
 }
 
+/**
+ * How Sammy talks, appended under the agent's own instruction. Written so the model speaks as the
+ * site's support agent: nothing here names a source, a block of text or a lookup, because small
+ * models echo those words back ("according to the website…").
+ */
+export const VOICE_GUIDE = `How you talk:
+- You are part of the team behind this site. Speak for it in the first person: "we", "our" and "us" where that sounds natural.
+- Be warm, relaxed and human, like a friendly person at the front desk. Reply in 2-4 short sentences unless the visitor asks for more detail.
+- Write like a person texting a helpful reply: plain sentences, no headers, no bold labels, and a list only when they ask for steps or options.
+- Never use em dashes or en dashes. Use a comma, a period or a new sentence instead.
+- Say things directly. No "not X but Y" framing and no lists of three just for rhythm.
+- Start with the answer. Don't praise the question, and don't close with a stock sign-off such as offering more help or hoping it helped.
+- Keep exclamation marks rare; calm and friendly beats excited.
+- Every reply is in your own words and fits what the visitor just said. Never fall back on a stock sentence.
+- Everything under "What you know" is simply what you know. Say it directly, the way a colleague would. Never say where an answer comes from, never attribute it to the site, a page or anything you were given, and never describe yourself looking something up.
+- Only call something our price, offer, hours or policy when what you know says it is ours. General advice in an article is not our pricing.
+- When what you know does not cover the question, say so plainly in one short sentence ("I'm not sure about that one" or "We don't have that detail here"), then offer the closest thing you can help with or how to reach the team (a contact page, email or booking link from what you know). Never make up facts such as prices, hours, addresses, dates, names or policies.
+- Share a link only when the visitor asks where to find something or how to do something on the site, and then give just the one that fits best.
+- A greeting or a one-word message gets a short, friendly reply; answer it if you can, otherwise ask what they need.
+- If someone is rude or off topic, stay kind and brief and steer back to what you can help with.
+- You are Sammy the shark, but you talk like a normal person. Skip ocean puns and sea wordplay; a light touch in a greeting is the most.`;
+
+/** The agent's instruction first, then the voice guide, then what Sammy knows about the site. */
 export function buildSystemPrompt(instruction: string, chunks: RetrievedChunk[]): string {
-  const blocks = chunks.map((c, i) => `[${i + 1}] ${c.title} — ${c.url}\n${c.content}`);
-  return `${instruction}\n\nWebsite content (cite the page URL when you use it):\n\n${blocks.join('\n\n')}`;
+  const known = chunks.length
+    ? chunks.map((c) => `## ${c.title}\nLink: ${c.url}\n${c.content}`).join('\n\n')
+    : 'Nothing that matches this question.';
+  return `${instruction}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n${known}`;
 }
 
 export interface HandleChatInput {
@@ -263,6 +289,16 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
     },
   });
 
+  // Em and en dashes are rewritten on the way out, even when a dash is split across deltas.
+  const dashes = createDashFilter();
+  let textId: string | null = null;
+  const flushText = (controller: TransformStreamDefaultController<UIMessageChunk>) => {
+    const rest = dashes.flush();
+    if (!rest || textId === null) return;
+    turn.answer += rest;
+    controller.enqueue({ type: 'text-delta', id: textId, delta: rest });
+  };
+
   // Reasoning stays on the server: the client stores and resends every message it receives.
   const stream = toUIMessageStream({
     stream: result.stream,
@@ -274,10 +310,20 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
   }).pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
-        if (chunk.type === 'text-delta') turn.answer += chunk.delta;
+        if (chunk.type === 'text-delta') {
+          textId = chunk.id;
+          const delta = dashes.push(chunk.delta);
+          if (delta) {
+            turn.answer += delta;
+            controller.enqueue({ ...chunk, delta });
+          }
+          return;
+        }
+        if (chunk.type === 'text-end') flushText(controller);
         controller.enqueue(chunk);
       },
-      async flush() {
+      async flush(controller) {
+        flushText(controller);
         pending.push(
           reportTurn({
             outcome: turn.failed ? 'provider_error' : 'ok',
