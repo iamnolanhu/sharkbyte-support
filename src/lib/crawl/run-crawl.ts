@@ -16,6 +16,7 @@ import {
   getAgentById,
   recordCrawledPage,
   saveDiscoveredUrls,
+  undoCrawlSlice,
   updateCrawlProgress,
 } from '@/lib/db/agents';
 import { chunksTableBytes, insertChunksWithinCeiling } from '@/lib/db/chunks';
@@ -104,6 +105,11 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
   let exhausted = false;
   /** A crawl-level failure (the agent or discovery); a failed page is only skipped. */
   let failure: unknown = null;
+  /** Rate limited (provider 429 or the daily embedding rail): the slice ended early. */
+  let paused = false;
+  /** Pages this slice stored or gave up on. */
+  let pagesThisSlice = 0;
+  let sliceState: Awaited<ReturnType<typeof beginCrawlSlice>> = null;
 
   // Inserts and progress updates run one at a time, so `pos` and the per-agent cap stay exact.
   let writeQueue: Promise<void> = Promise.resolve();
@@ -133,6 +139,7 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
       });
       chunkCount += inserted;
       pagesCrawled += 1;
+      pagesThisSlice += 1;
       pending = pending.filter((u) => u !== url);
       if (inserted < batch.length) ceilingReached = true;
       if (ceilingReached || chunkCount >= limits.maxChunksPerAgent) {
@@ -144,6 +151,7 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
   const skipPage = (url: string) =>
     serialized(async () => {
       pagesSkipped += 1;
+      pagesThisSlice += 1;
       pending = pending.filter((u) => u !== url);
       await recordCrawledPage(db, agentId, url, { pagesCrawled, chunkCount, pagesSkipped }, new Date(deps.now()));
     });
@@ -166,6 +174,7 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
     const mismatch = agent.status === 'crawling' ? await embeddingSizeMismatch(db) : null;
     if (mismatch) throw new Error(mismatch);
     const state = await beginCrawlSlice(db, agentId, new Date(start));
+    sliceState = state;
     if (!state) {
       // Finished (or reset) between the caller's check and this slice.
       return {
@@ -205,6 +214,7 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
             // Rate limited after every retry (or the daily embedding rail is spent): keep the
             // page pending and end this slice; a later slice tries again.
             console.warn(`[crawl] ${agentId} paused: ${err.message}`);
+            paused = true;
             stopped = true;
             continue;
           }
@@ -229,7 +239,16 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
   const seconds = Math.round((deps.now() - crawlStart) / 1000);
   const finished = failure !== null || full || exhausted || pending.length === 0;
   if (!finished) {
-    // Out of time with pages left: stay `crawling` for the next slice.
+    // Out of time (or rate limited) with pages left: stay `crawling` for the next slice. A slice
+    // that only met rate limits is taken back, so it neither uses up the slice cap nor counts
+    // as progress (the sweep's no-progress rule can still end the crawl).
+    if (paused && pagesThisSlice === 0 && sliceState) {
+      try {
+        await undoCrawlSlice(db, agentId, sliceState.previousProgressAt);
+      } catch (err) {
+        console.error(`[crawl] ${agentId} could not take back an empty slice:`, err instanceof Error ? err.message : err);
+      }
+    }
     return { status: 'crawling', pagesCrawled, pagesTotal, chunkCount, seconds };
   }
 

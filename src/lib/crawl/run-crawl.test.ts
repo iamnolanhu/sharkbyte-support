@@ -312,6 +312,52 @@ describe('runCrawl', () => {
       expect((await getAgentById(db, id))?.lastError).toBeNull();
     });
 
+    it('a slice that only met rate limits does not count toward the cap or as progress', async () => {
+      const id = await newAgent('paused.example');
+      const clock = { t: NOW.getTime() };
+      let limited = false;
+      const deps = makeDeps({
+        fetcher: siteFetcher('paused.example', { '/': 1, '/a': 1, '/b': 1, '/c': 1, '/d': 1 }),
+        embed: async (texts, inputType) => {
+          if (limited) throw new EmbeddingRateLimitError('Gemini embeddings failed with HTTP 429');
+          clock.t += 100_000;
+          return fakeEmbed(texts, inputType);
+        },
+        now: () => clock.t,
+        limits: testLimits({ pageFetchConcurrency: 1 }),
+      });
+      const state = async () =>
+        (
+          await db.query<{ crawl_slices: number; crawl_progress_at: Date }>(
+            'SELECT crawl_slices, crawl_progress_at FROM agents WHERE id = $1',
+            [id],
+          )
+        )[0];
+
+      // A normal slice stores pages: it counts.
+      expect((await runCrawl(id, deps)).status).toBe('crawling');
+      const afterWork = await state();
+      expect(afterWork?.crawl_slices).toBe(1);
+
+      // Every later slice is rate limited before any page finishes: none of them count.
+      limited = true;
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      for (let i = 0; i < MAX_CRAWL_SLICES + 2; i++) {
+        clock.t += 60_000;
+        expect((await runCrawl(id, deps)).status).toBe('crawling');
+      }
+      warned.mockRestore();
+      const afterPauses = await state();
+      expect(afterPauses?.crawl_slices).toBe(1);
+      expect(new Date(afterPauses!.crawl_progress_at).getTime()).toBe(new Date(afterWork!.crawl_progress_at).getTime());
+
+      // Once the limit clears, the crawl finishes all its pages.
+      limited = false;
+      let outcome = await runCrawl(id, deps);
+      while (outcome.status === 'crawling') outcome = await runCrawl(id, deps);
+      expect(outcome).toMatchObject({ status: 'ready', pagesCrawled: 5 });
+    });
+
     it('stores each page and takes it off the to-do list together', async () => {
       const id = await newAgent('atomic.example');
       await runCrawl(id, makeDeps({ fetcher: siteFetcher('atomic.example', { '/': 2, '/a': 3 }) }));

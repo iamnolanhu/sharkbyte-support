@@ -2,7 +2,7 @@ import { apiError, COPY, rateLimited } from '@/lib/agent-api';
 import { APP_DOMAIN, type Limits } from '@/lib/config';
 import type { Db } from '@/lib/db/client';
 import { getAgentById, resetForCrawl } from '@/lib/db/agents';
-import { checkRail } from '@/lib/rails';
+import { checkRail, embedRailSpent } from '@/lib/rails';
 import { ensureCapacity } from '@/lib/sweep';
 import { acquireLock, releaseLock, renewLock } from '@/lib/db/quota';
 import { runInBackground } from '@/lib/background';
@@ -41,6 +41,9 @@ export async function continueCrawl(db: Db, agent: AgentRow, now: Date, limits: 
   if (agent.status !== 'crawling') return false;
   // Fresh progress means a slice is running: skip the lock write on every 3-second poll.
   if (agent.crawlProgressAt && now.getTime() - agent.crawlProgressAt.getTime() < RECENT_PROGRESS_MS) return false;
+  // No embeddings left today: start nothing and touch nothing; the sweep's no-progress rule
+  // is the only thing that can end the crawl meanwhile.
+  if (await embedRailSpent(db, now, limits)) return false;
   if (!(await tryLockCrawl(db, agent.id, now, limits))) return false;
   await runSliceInBackground(db, agent.id);
   return true;

@@ -111,6 +111,11 @@ export function embedRequestGate(db: Db, limits: Limits): () => Promise<void> {
   };
 }
 
+/** Read-only: true once the day's embedding requests are spent (nothing is counted). */
+export async function embedRailSpent(db: Db, now: Date, limits: Limits): Promise<boolean> {
+  return (await readQuota(db, railKey('embed_daily', 'global', now), now)) >= limits.maxEmbedRequestsPerDay;
+}
+
 /** Read-only: blocks once the day's chat token budget is spent. */
 export async function checkChatTokenBudget(db: Db, now: Date, limits: Limits): Promise<RailResult> {
   const spent = await readQuota(db, railKey('chat_tokens', '', now), now);

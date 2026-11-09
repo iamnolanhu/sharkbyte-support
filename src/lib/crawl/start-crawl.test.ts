@@ -4,6 +4,7 @@ import type { Db } from '@/lib/db/client';
 import { getAgentById, insertAgent } from '@/lib/db/agents';
 import { countAllChunks, insertChunksWithinCeiling } from '@/lib/db/chunks';
 import { runInBackground } from '@/lib/background';
+import { embedRequestGate } from '@/lib/rails';
 import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
 import type { AgentRow } from '@/types';
 import { runCrawl, createCrawlDeps, type CrawlDeps } from './run-crawl';
@@ -74,6 +75,22 @@ describe('continueCrawl', () => {
     await releaseCrawlLock(db, agent.id);
     const quiet = { ...agent, crawlProgressAt: new Date(NOW.getTime() - 11_000) };
     expect(await continueCrawl(db, quiet, NOW, limits)).toBe(true);
+  });
+
+  it('starts nothing and touches nothing while the daily embedding rail is spent', async () => {
+    const small = { ...limits, maxEmbedRequestsPerDay: 2 };
+    const gate = embedRequestGate(db, small);
+    await gate();
+    await gate();
+    const before = await getAgentById(db, agent.id);
+
+    expect(await continueCrawl(db, agent, new Date(), small)).toBe(false);
+
+    expect(background).not.toHaveBeenCalled();
+    expect(await tryLockCrawl(db, agent.id, NOW, limits)).toBe(true);
+    const after = await getAgentById(db, agent.id);
+    expect(after?.status).toBe('crawling');
+    expect(after?.crawlProgressAt).toEqual(before?.crawlProgressAt);
   });
 
   it('releases the lock when the slice cannot be scheduled', async () => {

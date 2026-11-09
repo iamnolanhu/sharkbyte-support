@@ -185,6 +185,8 @@ export interface CrawlState {
   /** Slices run so far, this one included. */
   slices: number;
   crawlStartedAt: Date | null;
+  /** crawl_progress_at before this slice started (for undoCrawlSlice). */
+  previousProgressAt: Date | null;
 }
 
 interface CrawlStateRow {
@@ -195,15 +197,18 @@ interface CrawlStateRow {
   crawl_skipped: number | string;
   crawl_slices: number | string;
   crawl_started_at: Date | string | null;
+  previous_progress_at: Date | string | null;
 }
 
 /** Counts a new slice of a `crawling` agent and returns its state; null when it is not crawling. */
 export async function beginCrawlSlice(db: Db, id: string, now: Date): Promise<CrawlState | null> {
   if (!isUuid(id)) return null;
   const rows = await db.query<CrawlStateRow>(
-    `UPDATE agents SET crawl_slices = crawl_slices + 1, crawl_progress_at = $2
-     WHERE id = $1 AND status = 'crawling'
-     RETURNING crawl_pending, pages_crawled, pages_total, chunk_count, crawl_skipped, crawl_slices, crawl_started_at`,
+    `UPDATE agents AS a SET crawl_slices = a.crawl_slices + 1, crawl_progress_at = $2
+     FROM (SELECT crawl_progress_at FROM agents WHERE id = $1) AS before
+     WHERE a.id = $1 AND a.status = 'crawling'
+     RETURNING a.crawl_pending, a.pages_crawled, a.pages_total, a.chunk_count, a.crawl_skipped, a.crawl_slices,
+       a.crawl_started_at, before.crawl_progress_at AS previous_progress_at`,
     [id, now],
   );
   const r = rows[0];
@@ -216,7 +221,21 @@ export async function beginCrawlSlice(db: Db, id: string, now: Date): Promise<Cr
     pagesSkipped: Number(r.crawl_skipped),
     slices: Number(r.crawl_slices),
     crawlStartedAt: r.crawl_started_at === null ? null : toDate(r.crawl_started_at),
+    previousProgressAt: r.previous_progress_at === null ? null : toDate(r.previous_progress_at),
   };
+}
+
+/**
+ * Takes back a slice that did nothing (paused by rate limits before any page finished): it does
+ * not count toward the slice cap, and the crawl's last progress goes back to what it was.
+ */
+export async function undoCrawlSlice(db: Db, id: string, previousProgressAt: Date | null): Promise<void> {
+  if (!isUuid(id)) return;
+  await db.query(
+    `UPDATE agents SET crawl_slices = GREATEST(crawl_slices - 1, 0), crawl_progress_at = $2
+     WHERE id = $1 AND status = 'crawling'`,
+    [id, previousProgressAt],
+  );
 }
 
 /** Stores the discovered URL list as the crawl's to-do list. */
