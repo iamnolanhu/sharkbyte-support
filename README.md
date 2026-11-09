@@ -153,6 +153,8 @@ Add the chat widget to any website with a single script tag:
 - `data-position` - `bottom-right` or `bottom-left`
 - `data-welcome-message` - Custom greeting message
 
+Try it on a plain page: /embed-demo.html
+
 ---
 
 ## Deployment

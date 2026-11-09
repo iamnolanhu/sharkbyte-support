@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reef &amp; Co. - a pretend customer site</title>
+  <style>
+    body { font-family: system-ui, sans-serif; line-height: 1.6; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; color: #1a2b3c; }
+    h1 { margin-bottom: 0.25rem; }
+    pre { background: #f2f6fa; padding: 1rem; overflow-x: auto; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Reef &amp; Co.</h1>
+    <p><em>A pretend customer site</em></p>
+    <p>
+      This page exists to show the SharkByte widget on a plain third-party page.
+      It has no code of its own beyond the one script tag below, so the chat bubble in the
+      corner is loaded cross-origin from the SharkByte site, the same way a customer's site would embed it.
+    </p>
+    <h2>The embed code</h2>
+<pre>&lt;script
+  src="https://sharkbyte-support.vercel.app/widget.js"
+  data-agent-id="029b5749-0b04-11f1-b074-4e013e2ddde4"
+  data-primary-color="#0080FF"
+  data-position="bottom-right"
+  async
+&gt;&lt;/script&gt;</pre>
+  </main>
+  <script
+    src="https://sharkbyte-support.vercel.app/widget.js"
+    data-agent-id="029b5749-0b04-11f1-b074-4e013e2ddde4"
+    data-primary-color="#0080FF"
+    data-position="bottom-right"
+    async
+  ></script>
+</body>
+</html>
