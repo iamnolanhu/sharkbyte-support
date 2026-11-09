@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
+import type { AnalyticsValue } from '@/lib/analytics/server';
 import { APP_DOMAIN } from '@/lib/config';
 
 export type ChatSurface = 'site' | 'embed';
-export type ChatOutcome = 'ok' | 'provider_error' | 'rate_limited';
+export type ChatOutcome = 'ok' | 'provider_error' | 'embedding_error' | 'rate_limited';
 
 /** What a route knows about the request beyond its body. */
 export interface ChatRequestMeta {
@@ -115,5 +116,83 @@ export function chatEventProperties(input: ChatEventInput): Record<string, strin
     fallbackCount: input.fallbackCount,
     outcome: input.outcome,
     host_domain: embedHost(input.meta, input.hostDomain, APP_DOMAIN),
+  };
+}
+
+/** A chat id the client sent (the AI SDK's `id`), safe to use as an LLM-analytics trace id. */
+export function sanitizeTraceId(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z0-9_\-:.]{1,128}$/.test(value) ? value : null;
+}
+
+/** Our fields on every LLM-analytics event; `chat_surface` avoids the server's own `surface` tag. */
+interface AiEventContext {
+  traceId: string;
+  agentId: string;
+  domain: string;
+  meta: ChatRequestMeta;
+  hostDomain: string | null;
+}
+
+function contextProperties(c: AiEventContext): Record<string, AnalyticsValue> {
+  return {
+    $ai_trace_id: c.traceId,
+    agentId: c.agentId,
+    domain: c.domain,
+    chat_surface: c.meta.surface,
+    host_domain: embedHost(c.meta, c.hostDomain, APP_DOMAIN),
+  };
+}
+
+export interface AiGenerationInput extends AiEventContext {
+  /** Provider and model that answered; null when every provider failed before answering. */
+  provider: string | null;
+  model: string | null;
+  baseUrl: string | null;
+  /** The system prompt (instruction + retrieved pages) and the conversation, as sent. */
+  system: string;
+  turns: readonly { role: 'user' | 'assistant'; content: string }[];
+  answer: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  latencyMs: number;
+  failed: boolean;
+}
+
+/** PostHog `$ai_generation` properties for one chat turn ($ai_latency in seconds). */
+export function aiGenerationProperties(g: AiGenerationInput): Record<string, AnalyticsValue> {
+  return {
+    ...contextProperties(g),
+    $ai_model: g.model ?? 'unknown',
+    $ai_provider: g.provider ?? 'unknown',
+    $ai_base_url: g.baseUrl,
+    $ai_input: [{ role: 'system', content: g.system }, ...g.turns.map((t) => ({ role: t.role, content: t.content }))],
+    $ai_output_choices: g.answer ? [{ role: 'assistant', content: g.answer }] : [],
+    $ai_input_tokens: g.inputTokens,
+    $ai_output_tokens: g.outputTokens,
+    $ai_latency: g.latencyMs / 1000,
+    $ai_http_status: g.failed ? null : 200,
+    $ai_is_error: g.failed,
+  };
+}
+
+export interface AiEmbeddingInput extends AiEventContext {
+  provider: string;
+  model: string;
+  baseUrl: string;
+  question: string;
+  latencyMs: number;
+  failed: boolean;
+}
+
+/** PostHog `$ai_embedding` properties for the chat question's embedding ($ai_latency in seconds). */
+export function aiEmbeddingProperties(e: AiEmbeddingInput): Record<string, AnalyticsValue> {
+  return {
+    ...contextProperties(e),
+    $ai_model: e.model,
+    $ai_provider: e.provider,
+    $ai_base_url: e.baseUrl,
+    $ai_input: e.question,
+    $ai_latency: e.latencyMs / 1000,
+    $ai_is_error: e.failed,
   };
 }

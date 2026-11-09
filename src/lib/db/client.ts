@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { captureServer } from '@/lib/analytics/server';
-import { EMBEDDING_CONFIG } from '@/lib/config';
+import { EMBEDDING_CONFIG, type EnvVars } from '@/lib/config';
 import { EMBEDDING_DIMS_PROBE, embeddingDimsMigration, schemaStatements } from './schema';
 
 export interface SqlStatement {
@@ -18,44 +18,97 @@ export interface Db {
 /** Advisory-lock key that serializes schema setup when several cold starts race. */
 const SCHEMA_LOCK_ID = 74209;
 
-/** Set when applySchema resized chunks.embedding (and emptied chunks) in this call. */
-export interface DimsMigration {
+/** What applySchema found when chunks.embedding did not match `dims`. */
+export interface DimsChange {
+  /** `migrated`: chunks emptied and the column resized. `mismatch`: left alone (no opt-in). */
+  kind: 'migrated' | 'mismatch';
   fromDims: number;
   toDims: number;
-  /** Agents marked `failed` for re-embedding. */
+  /** Agents marked `failed` for re-embedding (0 for a mismatch). */
   agentsMarked: number;
 }
 
+/** The opt-in for the destructive dimension migration: set it for one deploy, then remove it. */
+export function dimsMigrationEnabled(env: EnvVars = process.env): boolean {
+  return env.EMBEDDING_DIMS_MIGRATE?.trim() === '1';
+}
+
 /**
- * Applies the schema in order, inside one transaction holding an advisory lock, then resizes
- * chunks.embedding when it does not match `dims`. The size is read under the lock, so only the
- * call that actually migrated reports it.
+ * Applies the schema in order, inside one transaction holding an advisory lock. When
+ * chunks.embedding does not match `dims`, it is migrated only with `migrate` (env
+ * EMBEDDING_DIMS_MIGRATE=1); otherwise the mismatch is reported and embedding writes refuse to
+ * run (see embeddingSizeMismatch). The size is read under the lock, so only the call that
+ * actually migrated reports a migration.
  */
-export async function applySchema(db: Db, dims: number = EMBEDDING_CONFIG.dimensions): Promise<DimsMigration | null> {
+export async function applySchema(
+  db: Db,
+  dims: number = EMBEDDING_CONFIG.dimensions,
+  migrate: boolean = dimsMigrationEnabled(),
+): Promise<DimsChange | null> {
   const results = await db.transaction([
     { text: 'SELECT pg_advisory_xact_lock($1)', params: [SCHEMA_LOCK_ID] },
     ...schemaStatements(dims).map((text) => ({ text })),
     { text: EMBEDDING_DIMS_PROBE },
-    { text: embeddingDimsMigration(dims) },
+    ...(migrate ? [{ text: embeddingDimsMigration(dims) }] : []),
   ]);
-  const probe = results[results.length - 2]?.[0] as { dims: number | string; agents: number | string | bigint } | undefined;
+  const probe = results[results.length - (migrate ? 2 : 1)]?.[0] as
+    | { dims: number | string; agents: number | string | bigint }
+    | undefined;
   const fromDims = Number(probe?.dims);
   if (!probe || fromDims === dims) return null;
-  return { fromDims, toDims: dims, agentsMarked: Number(probe.agents) };
+  return migrate
+    ? { kind: 'migrated', fromDims, toDims: dims, agentsMarked: Number(probe.agents) }
+    : { kind: 'mismatch', fromDims, toDims: dims, agentsMarked: 0 };
 }
 
-/** Logs and reports a dimension migration (server PostHog event `embedding_dims_migrated`). */
-async function reportMigration(migration: DimsMigration | null): Promise<void> {
-  if (!migration) return;
+/** Logs and reports a dimension change (`embedding_dims_migrated` or `embedding_dims_mismatch`). */
+async function reportDimsChange(change: DimsChange | null): Promise<void> {
+  if (!change) return;
+  if (change.kind === 'mismatch') {
+    console.error(`[db] ${mismatchMessage(change.fromDims, change.toDims)}`);
+    await captureServer('embedding_dims_mismatch', { column_dims: change.fromDims, embedding_dims: change.toDims });
+    return;
+  }
   console.warn(
-    `[db] chunks.embedding resized ${migration.fromDims} -> ${migration.toDims}; ` +
-      `${migration.agentsMarked} agents marked for re-embedding`,
+    `[db] chunks.embedding resized ${change.fromDims} -> ${change.toDims}; ` +
+      `${change.agentsMarked} agents marked for re-embedding`,
   );
   await captureServer('embedding_dims_migrated', {
-    from_dims: migration.fromDims,
-    to_dims: migration.toDims,
-    agents_marked: migration.agentsMarked,
+    from_dims: change.fromDims,
+    to_dims: change.toDims,
+    agents_marked: change.agentsMarked,
   });
+}
+
+function mismatchMessage(columnDims: number, embeddingDims: number): string {
+  return (
+    `chunks.embedding is halfvec(${columnDims}) but EMBEDDING_DIMS is ${embeddingDims}: ` +
+    'deploy once with EMBEDDING_DIMS_MIGRATE=1 to re-embed, or set EMBEDDING_DIMS to match'
+  );
+}
+
+const columnDimsCache = new WeakMap<Db, Promise<number>>();
+
+/** The size of chunks.embedding (cached per database handle). */
+export function embeddingColumnDims(db: Db): Promise<number> {
+  let dims = columnDimsCache.get(db);
+  if (!dims) {
+    dims = db
+      .query<{ dims: number | string }>(
+        `SELECT atttypmod AS dims FROM pg_attribute WHERE attrelid = 'chunks'::regclass AND attname = 'embedding'`,
+      )
+      .then((rows) => Number(rows[0]?.dims));
+    dims.catch(() => columnDimsCache.delete(db));
+    columnDimsCache.set(db, dims);
+  }
+  return dims;
+}
+
+/** Null when stored and new vectors have the same size; otherwise the error to fail with. */
+export async function embeddingSizeMismatch(db: Db): Promise<string | null> {
+  const columnDims = await embeddingColumnDims(db);
+  const embeddingDims = EMBEDDING_CONFIG.dimensions;
+  return columnDims === embeddingDims ? null : mismatchMessage(columnDims, embeddingDims);
 }
 
 function createNeonDb(connectionString: string): Db {
@@ -77,7 +130,7 @@ function createNeonDb(connectionString: string): Db {
 function withSchema(raw: Db): Db {
   let ready: Promise<void> | null = null;
   const ensureSchema = (): Promise<void> => {
-    ready ??= applySchema(raw).then(reportMigration, (err: unknown) => {
+    ready ??= applySchema(raw).then(reportDimsChange, (err: unknown) => {
       ready = null; // let the next request retry
       throw err;
     });

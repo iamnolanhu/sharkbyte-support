@@ -112,6 +112,19 @@ describe('sweep', () => {
     expect(await countAllChunks(db)).toBe(10);
   });
 
+  it('keeps agents awaiting re-embedding past the failed-agent day, until the idle rule', async () => {
+    const waiting = await seed('waiting.test', { status: 'failed', lastUsedAgoMs: 25 * HOUR });
+    await db.query(`UPDATE agents SET last_error = 're-embedding required' WHERE id = $1`, [waiting]);
+    const idle = await seed('idle.test', { status: 'failed', lastUsedAgoMs: 15 * DAY });
+    await db.query(`UPDATE agents SET last_error = 're-embedding required' WHERE id = $1`, [idle]);
+
+    const result = await sweep(db, NOW, limits);
+
+    expect(result.agentsRemoved).toBe(1);
+    expect(await getAgentByDomain(db, 'waiting.test')).not.toBeNull();
+    expect(await getAgentByDomain(db, 'idle.test')).toBeNull();
+  });
+
   it('deletes failed agents unused for a day', async () => {
     await seed('gone.test', { status: 'failed', lastUsedAgoMs: 25 * HOUR, chunks: 2 });
     await seed('kept.test', { status: 'failed', lastUsedAgoMs: 23 * HOUR, chunks: 2 });

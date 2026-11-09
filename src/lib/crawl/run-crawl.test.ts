@@ -9,6 +9,7 @@ import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db'
 import type { EmbedFn } from '@/lib/embeddings';
 import type { Fetcher } from './discover';
 import { MAX_CRAWL_SLICES, runCrawl, type CrawlDeps } from './run-crawl';
+import { EmbeddingQuotaError, EmbeddingRateLimitError } from '@/lib/embedding-errors';
 
 const NOW = new Date('2026-11-05T10:00:00.000Z');
 const CAPACITY_COPY = 'The free demo is full right now — try again tomorrow';
@@ -267,6 +268,60 @@ describe('runCrawl', () => {
       expect(await pending(id)).toBeNull();
     });
 
+    it('a rate-limited page stays pending and ends the slice; the next slice stores it', async () => {
+      const id = await newAgent('limited.example');
+      let limited = true;
+      const embed: EmbedFn = async (texts, inputType) => {
+        if (limited && texts.some((t) => t.includes('limited.example/a '))) {
+          throw new EmbeddingRateLimitError('Gemini embeddings failed with HTTP 429');
+        }
+        return fakeEmbed(texts, inputType);
+      };
+      const deps = makeDeps({
+        fetcher: siteFetcher('limited.example', { '/': 1, '/a': 1, '/b': 1 }),
+        embed,
+        limits: testLimits({ pageFetchConcurrency: 1 }),
+      });
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const first = await runCrawl(id, deps);
+
+      expect(warned).toHaveBeenCalled();
+      warned.mockRestore();
+      expect(first).toMatchObject({ status: 'crawling', pagesCrawled: 1, chunkCount: 1 });
+      expect(await pending(id)).toEqual(['https://limited.example/a', 'https://limited.example/b']);
+
+      limited = false;
+      const second = await runCrawl(id, deps);
+      expect(second).toMatchObject({ status: 'ready', pagesCrawled: 3, chunkCount: 3 });
+    });
+
+    it('a spent daily embedding rail pauses the crawl the same way', async () => {
+      const id = await newAgent('quota.example');
+      const deps = makeDeps({
+        fetcher: siteFetcher('quota.example', { '/': 1, '/a': 1 }),
+        embed: async () => {
+          throw new EmbeddingQuotaError('spent');
+        },
+      });
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const outcome = await runCrawl(id, deps);
+      warned.mockRestore();
+      expect(outcome.status).toBe('crawling');
+      expect(await pending(id)).toHaveLength(2);
+      expect((await getAgentById(db, id))?.lastError).toBeNull();
+    });
+
+    it('stores each page and takes it off the to-do list together', async () => {
+      const id = await newAgent('atomic.example');
+      await runCrawl(id, makeDeps({ fetcher: siteFetcher('atomic.example', { '/': 2, '/a': 3 }) }));
+      const [row] = await db.query<{ chunk_count: number; pages_crawled: number }>(
+        'SELECT chunk_count, pages_crawled FROM agents WHERE id = $1',
+        [id],
+      );
+      expect(row).toEqual({ chunk_count: 5, pages_crawled: 2 });
+    });
+
     it('a slice for an agent that is no longer crawling does nothing', async () => {
       const id = await newAgent('done.example');
       await db.query(`UPDATE agents SET status = 'ready' WHERE id = $1`, [id]);
@@ -430,6 +485,21 @@ describe('runCrawl', () => {
     expect((await storedChunks(a)).length).toBe(outA.chunkCount);
     expect((await storedChunks(b)).length).toBe(outB.chunkCount);
     expect((await getAgentById(db, a))?.chunkCount).toBe(outA.chunkCount);
+  });
+
+  it('fails loudly when stored vectors have another size than EMBEDDING_DIMS', async () => {
+    const id = await newAgent('sized.example');
+    vi.stubEnv('EMBEDDING_DIMS', '1536');
+    const embed = vi.fn<EmbedFn>(fakeEmbed);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const outcome = await runCrawl(id, makeDeps({ fetcher: siteFetcher('sized.example', { '/': 1 }), embed }));
+
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('failed'), expect.stringContaining('EMBEDDING_DIMS_MIGRATE=1'));
+    logged.mockRestore();
+    vi.unstubAllEnvs();
+    expect(outcome.status).toBe('failed');
+    expect(embed).not.toHaveBeenCalled();
   });
 
   it('a crawl that starts at the ceiling fails with the full-demo copy', async () => {

@@ -29,6 +29,8 @@ export interface Limits {
   maxCrawlsPerDay: number;
   maxChatTokensPerDay: number;
   maxFirecrawlPerDay: number;
+  /** Embedding provider requests per UTC day, app-wide (Gemini free tier: about 1,000). */
+  maxEmbedRequestsPerDay: number;
   createsPerIpPerHour: number;
   chatMessagesPerIpPerMinute: number;
   maxUserMessageChars: number;
@@ -68,9 +70,10 @@ export function getLimits(env: EnvVars = process.env): Limits {
     maxPagesPerAgent: envInt(env, 'MAX_PAGES_PER_AGENT', 30),
     maxChunksPerAgent: envInt(env, 'MAX_CHUNKS_PER_AGENT', 300),
     maxTotalChunks: envInt(env, 'MAX_TOTAL_CHUNKS', 40000),
-    maxCrawlsPerDay: envInt(env, 'MAX_CRAWLS_PER_DAY', 50),
+    maxCrawlsPerDay: envInt(env, 'MAX_CRAWLS_PER_DAY', 20),
     maxChatTokensPerDay: envInt(env, 'MAX_CHAT_TOKENS_PER_DAY', 500000),
     maxFirecrawlPerDay: envInt(env, 'MAX_FIRECRAWL_PER_DAY', 50),
+    maxEmbedRequestsPerDay: envInt(env, 'MAX_EMBED_REQUESTS_PER_DAY', 900),
     createsPerIpPerHour: 3,
     chatMessagesPerIpPerMinute: 20,
     maxUserMessageChars: 2000,
@@ -170,14 +173,16 @@ export const FIRECRAWL_CONFIG = {
 } as const;
 
 // Embeddings: Gemini (default, free tier) or NVIDIA Build. Changing the provider, model or
-// dimensions means re-embedding every agent; the schema does that by itself on a dimension change
-// (see src/lib/db/client.ts).
+// dimensions means re-embedding every agent; a dimension change also needs a one-deploy
+// EMBEDDING_DIMS_MIGRATE=1 (see src/lib/db/client.ts).
 export type EmbeddingProvider = 'gemini' | 'nvidia';
 
 interface EmbeddingDefaults {
   baseUrl: string;
   model: string;
   dimensions: number;
+  /** Largest EMBEDDING_DIMS the model serves (and halfvec, 4000, can hold). */
+  maxDimensions: number;
   batchSize: number;
   maxBatchSize: number;
 }
@@ -188,6 +193,7 @@ export const EMBEDDING_DEFAULTS: Readonly<Record<EmbeddingProvider, EmbeddingDef
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     model: 'gemini-embedding-001',
     dimensions: 768,
+    maxDimensions: 3072,
     batchSize: 100,
     maxBatchSize: 100,
   },
@@ -199,13 +205,11 @@ export const EMBEDDING_DEFAULTS: Readonly<Record<EmbeddingProvider, EmbeddingDef
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     model: 'nvidia/nemotron-3.5-embed-1b',
     dimensions: 1024,
+    maxDimensions: 4000,
     batchSize: 1,
     maxBatchSize: 32,
   },
 };
-
-/** pgvector's halfvec holds at most 4000 dimensions. */
-const MAX_HALFVEC_DIMS = 4000;
 
 export const EMBEDDING_CONFIG = {
   /** `EMBEDDING_PROVIDER`: gemini (default) or nvidia. */
@@ -218,11 +222,15 @@ export const EMBEDDING_CONFIG = {
   get model(): string {
     return process.env.EMBEDDING_MODEL?.trim() || EMBEDDING_DEFAULTS[this.provider].model;
   },
-  /** Must match the chunks.embedding halfvec column; a change re-embeds every agent. */
+  /**
+   * Must match the chunks.embedding halfvec column. A value above the provider's maximum
+   * (Gemini 3072, NVIDIA 4000) falls back to the default; changing it needs a migration
+   * (EMBEDDING_DIMS_MIGRATE=1, see src/lib/db/client.ts).
+   */
   get dimensions(): number {
-    const fallback = EMBEDDING_DEFAULTS[this.provider].dimensions;
-    const dims = envInt(process.env, 'EMBEDDING_DIMS', fallback);
-    return dims <= MAX_HALFVEC_DIMS ? dims : fallback;
+    const d = EMBEDDING_DEFAULTS[this.provider];
+    const dims = envInt(process.env, 'EMBEDDING_DIMS', d.dimensions);
+    return dims <= d.maxDimensions ? dims : d.dimensions;
   },
   /** Inputs per request (`EMBEDDING_BATCH_SIZE`), capped at the provider's maximum. */
   get batchSize(): number {

@@ -10,18 +10,41 @@ export function toVectorLiteral(v: readonly number[]): string {
   return '[' + v.join(',') + ']';
 }
 
+/** A crawled page to record with its chunks: off the crawl's to-do list, counters updated. */
+export interface CrawledPage {
+  url: string;
+  /** Pages crawled including this one. */
+  pagesCrawled: number;
+  pagesSkipped: number;
+  now: Date;
+}
+
 /**
  * Inserts chunks in order until the table holds `maxTotalChunks` rows, and
  * returns how many went in. The count and the insert run in one transaction
  * behind CHUNK_CEILING_LOCK_ID, so the ceiling holds across concurrent crawls.
+ * With `page`, the same transaction records the page on the agent row, so a
+ * stored page is never left on the to-do list (or the reverse).
  */
 export async function insertChunksWithinCeiling(
   db: Db,
   agentId: string,
   chunks: ChunkInput[],
   maxTotalChunks: number,
+  page?: CrawledPage,
 ): Promise<number> {
-  if (chunks.length === 0) return 0;
+  if (chunks.length === 0 && !page) return 0;
+  const record = page
+    ? [
+        {
+          text: `UPDATE agents SET crawl_pending = array_remove(crawl_pending, $2), pages_crawled = $3,
+                   chunk_count = (SELECT count(*) FROM chunks WHERE agent_id = $1), crawl_skipped = $4,
+                   crawl_progress_at = $5
+                 WHERE id = $1`,
+          params: [agentId, page.url, page.pagesCrawled, page.pagesSkipped, page.now],
+        },
+      ]
+    : [];
   const results = await db.transaction([
     { text: 'SELECT pg_advisory_xact_lock($1)', params: [CHUNK_CEILING_LOCK_ID] },
     {
@@ -42,6 +65,7 @@ export async function insertChunksWithinCeiling(
         maxTotalChunks,
       ],
     },
+    ...record,
   ]);
   return results[1]?.length ?? 0;
 }

@@ -17,6 +17,7 @@ const ROW: AgentRow = {
   createdAt: new Date('2026-11-01T00:00:00.000Z'),
   lastUsedAt: new Date('2026-11-02T00:00:00.000Z'),
   crawlStartedAt: new Date('2026-11-01T00:00:00.000Z'),
+  crawlProgressAt: null,
   lastError: null,
   pinned: false,
   ownerTokenHash: OWNER_HASH,

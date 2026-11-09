@@ -37,6 +37,11 @@ const PROVIDERS: Record<ProviderName, ProviderSpec> = {
   },
 };
 
+/** The OpenAI-compatible API root a provider is called at (LLM analytics `$ai_base_url`). */
+export function providerBaseUrl(name: ProviderName): string {
+  return PROVIDERS[name].baseURL;
+}
+
 /**
  * Request fields that keep a reasoning model's thinking out of the way: answers get 600 output
  * tokens and the first text must arrive within the first-byte timeout. Nemotron models think by

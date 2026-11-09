@@ -7,7 +7,14 @@ export type ServerEvent =
   | 'llm_stream_error'
   | 'chat_completed'
   | 'cron_sweep'
-  | 'embedding_dims_migrated';
+  | 'embedding_dims_migrated'
+  | 'embedding_dims_mismatch'
+  // PostHog LLM analytics (manual capture)
+  | '$ai_generation'
+  | '$ai_embedding';
+
+/** A server event property: LLM analytics events carry message arrays. */
+export type AnalyticsValue = string | number | boolean | null | AnalyticsValue[] | { [key: string]: AnalyticsValue };
 
 const DEFAULT_DISTINCT_ID = 'sharkbyte-server';
 
@@ -20,7 +27,7 @@ const CAPTURE_BUDGET_MS = 2000;
  */
 export async function captureServer(
   event: ServerEvent,
-  properties: Record<string, string | number | boolean | null>,
+  properties: Record<string, AnalyticsValue>,
   distinctId: string = DEFAULT_DISTINCT_ID,
 ): Promise<void> {
   const apiKey = process.env.POSTHOG_API_KEY;

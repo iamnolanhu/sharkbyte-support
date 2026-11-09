@@ -4,6 +4,7 @@
  */
 
 import { EMBEDDING_CONFIG } from './config';
+import { EmbeddingRateLimitError } from './embedding-errors';
 import type { EmbedFn } from './embeddings';
 
 const RETRY_DELAY_MS = 1000;
@@ -49,6 +50,7 @@ interface BatchContext {
   inputType: 'passage' | 'query';
   apiKey: string;
   signal?: AbortSignal;
+  beforeRequest?: () => Promise<void>;
 }
 
 /**
@@ -68,6 +70,7 @@ async function embedBatch(texts: string[], ctx: BatchContext): Promise<number[][
   });
   for (let attempt = 0; ; attempt++) {
     ctx.signal?.throwIfAborted();
+    await ctx.beforeRequest?.();
     const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const res = await fetch(`${EMBEDDING_CONFIG.baseUrl}/embeddings`, {
       method: 'POST',
@@ -86,6 +89,7 @@ async function embedBatch(texts: string[], ctx: BatchContext): Promise<number[][
       await sleep(RETRY_DELAY_MS);
       continue;
     }
+    if (res.status === 429) throw new EmbeddingRateLimitError('NVIDIA embeddings failed with HTTP 429');
     throw new Error(`NVIDIA embeddings failed with HTTP ${res.status}`);
   }
 }
@@ -94,7 +98,7 @@ async function embedBatch(texts: string[], ctx: BatchContext): Promise<number[][
 export const embedTextsNvidia: EmbedFn = async (texts, inputType, options = {}) => {
   const apiKey = process.env.NVIDIA_API_KEY?.trim();
   if (!apiKey) throw new Error('NVIDIA_API_KEY is not set');
-  const ctx: BatchContext = { inputType, apiKey, signal: options.signal };
+  const ctx: BatchContext = { inputType, apiKey, signal: options.signal, beforeRequest: options.beforeRequest };
   const size = EMBEDDING_CONFIG.batchSize;
   const vectors: number[][] = [];
   for (let i = 0; i < texts.length; i += size) {

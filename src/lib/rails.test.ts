@@ -6,11 +6,13 @@ import {
   addChatTokens,
   checkChatTokenBudget,
   checkRail,
+  embedRequestGate,
   getClientIp,
   railResponse,
   type RailBlocked,
 } from '@/lib/rails';
 import { createTestDb, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
+import { EmbeddingQuotaError } from '@/lib/embedding-errors';
 
 const limits = getLimits({});
 const IP = { ip: '203.0.113.7' };
@@ -70,6 +72,15 @@ describe('rails', () => {
       ok: false,
       rail: 'firecrawl_daily',
     });
+  });
+
+  it('the embedding gate counts each request and refuses past MAX_EMBED_REQUESTS_PER_DAY', async () => {
+    const small = getLimits({ MAX_EMBED_REQUESTS_PER_DAY: '2' });
+    const gate = embedRequestGate(db, small);
+    await gate();
+    await gate();
+    await expect(gate()).rejects.toBeInstanceOf(EmbeddingQuotaError);
+    await expect(gate()).rejects.toThrow('Sammy has read all it can for today');
   });
 
   it('chat token budget blocks once spent', async () => {

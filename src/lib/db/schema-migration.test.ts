@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applySchema } from './client';
+import { applySchema, dimsMigrationEnabled, embeddingSizeMismatch } from './client';
 import { getAgentByDomain, insertAgent } from './agents';
 import { countAllChunks, insertChunksWithinCeiling, searchChunks } from './chunks';
 import { REEMBED_REQUIRED_ERROR } from './schema';
@@ -41,41 +41,72 @@ describe('embedding dimension migration', () => {
     'a fresh database gets the configured size and reports no migration',
     async () => {
       const db = await createEmptyTestDb();
-      expect(await applySchema(db, 768)).toBeNull();
+      expect(await applySchema(db, 768, false)).toBeNull();
       expect(await columnDims(db)).toBe(768);
-      expect(await applySchema(db, 768)).toBeNull();
+      expect(await applySchema(db, 768, true)).toBeNull();
     },
     TEST_DB_TIMEOUT_MS,
   );
 
   it(
-    'a size change empties chunks, resizes the column and marks every non-crawling agent for re-embedding',
+    'without the opt-in a size change touches nothing and is reported as a mismatch',
     async () => {
       const db = await createEmptyTestDb();
-      await applySchema(db, 1024);
+      await applySchema(db, 1024, false);
+      await seedAgent(db, 'ready.example', 'ready', 1024, 3);
+
+      expect(await applySchema(db, 768, false)).toEqual({ kind: 'mismatch', fromDims: 1024, toDims: 768, agentsMarked: 0 });
+
+      expect(await columnDims(db)).toBe(1024);
+      expect(await countAllChunks(db)).toBe(3);
+      expect((await getAgentByDomain(db, 'ready.example'))?.status).toBe('ready');
+      // EMBEDDING_DIMS defaults to 768 here: writes and searches refuse with a clear message.
+      expect(await embeddingSizeMismatch(db)).toMatch(/halfvec\(1024\).*EMBEDDING_DIMS is 768.*EMBEDDING_DIMS_MIGRATE=1/);
+    },
+    TEST_DB_TIMEOUT_MS,
+  );
+
+  it('the opt-in is EMBEDDING_DIMS_MIGRATE=1 only', () => {
+    expect(dimsMigrationEnabled({ EMBEDDING_DIMS_MIGRATE: '1' })).toBe(true);
+    expect(dimsMigrationEnabled({ EMBEDDING_DIMS_MIGRATE: 'true' })).toBe(false);
+    expect(dimsMigrationEnabled({})).toBe(false);
+  });
+
+  it(
+    'with the opt-in a size change empties chunks, resizes the column and marks every agent for re-embedding',
+    async () => {
+      const db = await createEmptyTestDb();
+      await applySchema(db, 1024, false);
       await seedAgent(db, 'ready.example', 'ready', 1024, 3);
       await seedAgent(db, 'failed.example', 'failed', 1024, 0);
       await seedAgent(db, 'crawling.example', 'crawling', 1024, 2);
       expect(await countAllChunks(db)).toBe(5);
 
-      const migration = await applySchema(db, 768);
+      await db.query(`UPDATE agents SET pages_crawled = 4, crawl_slices = 2, crawl_skipped = 1, crawl_pending = ARRAY['https://crawling.example/x'] WHERE domain = 'crawling.example'`);
 
-      expect(migration).toEqual({ fromDims: 1024, toDims: 768, agentsMarked: 2 });
+      const migration = await applySchema(db, 768, true);
+
+      expect(migration).toEqual({ kind: 'migrated', fromDims: 1024, toDims: 768, agentsMarked: 2 });
       expect(await columnDims(db)).toBe(768);
       expect(await countAllChunks(db)).toBe(0);
       const ready = await getAgentByDomain(db, 'ready.example');
       expect(ready).toMatchObject({ status: 'failed', lastError: REEMBED_REQUIRED_ERROR, chunkCount: 0 });
       expect((await getAgentByDomain(db, 'failed.example'))?.lastError).toBe(REEMBED_REQUIRED_ERROR);
-      // A crawl in flight is left to finish (or stall) on its own.
-      expect((await getAgentByDomain(db, 'crawling.example'))?.status).toBe('crawling');
+      // A crawl in flight stays crawling, its progress reset (its pages are gone).
+      expect(await getAgentByDomain(db, 'crawling.example')).toMatchObject({ status: 'crawling', chunkCount: 0, pagesCrawled: 0 });
+      const [crawlState] = await db.query<{ crawl_pending: string[] | null; crawl_slices: number; crawl_skipped: number }>(
+        `SELECT crawl_pending, crawl_slices, crawl_skipped FROM agents WHERE domain = 'crawling.example'`,
+      );
+      expect(crawlState).toEqual({ crawl_pending: null, crawl_slices: 0, crawl_skipped: 0 });
 
       // New-size vectors store and search; old-size ones are refused.
       const id = await seedAgent(db, 'new.example', 'ready', 768, 8);
       expect(await searchChunks(db, id, fakeEmbedding(1, 768), 6)).toHaveLength(6);
       await expect(seedAgent(db, 'old.example', 'ready', 1024, 1)).rejects.toThrow();
 
-      // Idempotent: the next cold start changes nothing.
-      expect(await applySchema(db, 768)).toBeNull();
+      // Idempotent: the next cold start changes nothing, with or without the opt-in.
+      expect(await applySchema(db, 768, true)).toBeNull();
+      expect(await applySchema(db, 768, false)).toBeNull();
       expect(await countAllChunks(db)).toBe(8);
     },
     TEST_DB_TIMEOUT_MS,

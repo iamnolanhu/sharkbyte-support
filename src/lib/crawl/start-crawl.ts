@@ -4,7 +4,7 @@ import type { Db } from '@/lib/db/client';
 import { getAgentById, resetForCrawl } from '@/lib/db/agents';
 import { checkRail } from '@/lib/rails';
 import { ensureCapacity } from '@/lib/sweep';
-import { acquireLock, releaseLock } from '@/lib/db/quota';
+import { acquireLock, releaseLock, renewLock } from '@/lib/db/quota';
 import { runInBackground } from '@/lib/background';
 import type { AgentRow } from '@/types';
 import { createCrawlDeps, runCrawl } from './run-crawl';
@@ -23,6 +23,11 @@ export function tryLockCrawl(db: Db, agentId: string, now: Date, limits: Limits)
   return acquireLock(db, crawlLockKey(agentId), now, staleAfterMs(limits));
 }
 
+/** Renews a held crawl lock for another slice (the importer runs slices back to back). */
+export function renewCrawlLock(db: Db, agentId: string, now: Date, limits: Limits): Promise<void> {
+  return renewLock(db, crawlLockKey(agentId), now, staleAfterMs(limits));
+}
+
 export function releaseCrawlLock(db: Db, agentId: string): Promise<void> {
   return releaseLock(db, crawlLockKey(agentId));
 }
@@ -34,20 +39,33 @@ export function releaseCrawlLock(db: Db, agentId: string): Promise<void> {
  */
 export async function continueCrawl(db: Db, agent: AgentRow, now: Date, limits: Limits): Promise<boolean> {
   if (agent.status !== 'crawling') return false;
+  // Fresh progress means a slice is running: skip the lock write on every 3-second poll.
+  if (agent.crawlProgressAt && now.getTime() - agent.crawlProgressAt.getTime() < RECENT_PROGRESS_MS) return false;
   if (!(await tryLockCrawl(db, agent.id, now, limits))) return false;
-  runSliceInBackground(db, agent.id);
+  await runSliceInBackground(db, agent.id);
   return true;
 }
 
-/** Runs one crawl slice after the response; the caller holds the crawl lock, which is always released. */
-function runSliceInBackground(db: Db, agentId: string): void {
-  runInBackground(async () => {
-    try {
-      await runCrawl(agentId, createCrawlDeps());
-    } finally {
-      await releaseCrawlLock(db, agentId);
-    }
-  });
+/** A crawl that made progress this recently has a slice running. */
+const RECENT_PROGRESS_MS = 10_000;
+
+/**
+ * Runs one crawl slice after the response. The caller holds the crawl lock; it is released when
+ * the slice ends, or right away if the slice cannot be scheduled.
+ */
+async function runSliceInBackground(db: Db, agentId: string): Promise<void> {
+  try {
+    runInBackground(async () => {
+      try {
+        await runCrawl(agentId, createCrawlDeps());
+      } finally {
+        await releaseCrawlLock(db, agentId);
+      }
+    });
+  } catch (err) {
+    await releaseCrawlLock(db, agentId);
+    throw err;
+  }
 }
 
 /** `startLockedCrawl` for route handlers: a start that throws frees the lock instead of holding it for the TTL. */
@@ -108,5 +126,5 @@ async function railRefusal(db: Db, agentId: string, ip: string, now: Date, limit
 /** Resets the agent and crawls in the background. The caller must already hold the crawl lock. */
 export async function startLockedCrawl(db: Db, agentId: string, now: Date): Promise<void> {
   await resetForCrawl(db, agentId, now);
-  runSliceInBackground(db, agentId);
+  await runSliceInBackground(db, agentId);
 }

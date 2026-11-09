@@ -10,7 +10,8 @@ import { insertChunksWithinCeiling } from '@/lib/db/chunks';
 import { readQuota } from '@/lib/db/quota';
 import { embedTexts } from '@/lib/embeddings';
 import { buildChain } from '@/lib/llm/providers';
-import { addChatTokens, checkRail, railKey } from '@/lib/rails';
+import { addChatTokens, checkRail, RAIL_COPY, railKey } from '@/lib/rails';
+import { EmbeddingQuotaError } from '@/lib/embedding-errors';
 import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
 import type { AgentRow } from '@/types';
 import { POST as chatPost } from '@/app/api/chat/route';
@@ -246,7 +247,9 @@ describe('handleChat', () => {
     const text = await res.text();
     expect(text).toContain('Sharks love docs');
 
-    expect(embedTexts).toHaveBeenCalledWith(['Do sharks have fins?'], 'query');
+    expect(embedTexts).toHaveBeenCalledWith(['Do sharks have fins?'], 'query', {
+      beforeRequest: expect.any(Function),
+    });
     const call = model.doStreamCalls[0];
     expect(call?.maxOutputTokens).toBe(600);
     const system = call?.prompt.find((m) => m.role === 'system');
@@ -333,7 +336,7 @@ describe('handleChat', () => {
     expect(captureServer).toHaveBeenCalledWith('llm_fallback', { from: 'cerebras', to: 'openrouter', reason: 'missing_key' });
   });
 
-  it('an embedding failure is 503 with CORS and no model call', async () => {
+  it('an embedding failure is 503 with its own copy, CORS and no model call', async () => {
     const agent = await makeAgent('reef.example');
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.mocked(embedTexts).mockRejectedValue(new Error('NVIDIA embeddings failed with HTTP 503'));
@@ -347,8 +350,37 @@ describe('handleChat', () => {
     errorSpy.mockRestore();
     expect(res.status).toBe(503);
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
-    expect(await res.json()).toEqual({ success: false, error: COPY.providersDown });
+    expect(await res.json()).toEqual({ success: false, error: COPY.embeddingFailed });
     expect(model.doStreamCalls).toHaveLength(0);
+    expect(completedEvents()[0]).toMatchObject({ outcome: 'embedding_error' });
+  });
+
+  it('a spent daily embedding rail is a 429 with the rail copy', async () => {
+    const agent = await makeAgent('reef.example');
+    vi.mocked(embedTexts).mockRejectedValue(new EmbeddingQuotaError(RAIL_COPY.embed_daily));
+    const model = useModel(answerParts('nope'));
+
+    const res = await handleChat({ agentId: agent.id, raw: body([userMessage('hi')]), ip: IP });
+
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { error: string }).error).toBe(RAIL_COPY.embed_daily);
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect(completedEvents()[0]).toMatchObject({ outcome: 'rate_limited' });
+  });
+
+  it('stored vectors of another size refuse to search, without embedding', async () => {
+    const agent = await makeAgent('reef.example');
+    vi.stubEnv('EMBEDDING_DIMS', '1536');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const res = await handleChat({ agentId: agent.id, raw: body([userMessage('hi')]), ip: IP });
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('EMBEDDING_DIMS_MIGRATE=1'));
+    errorSpy.mockRestore();
+    vi.unstubAllEnvs();
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { error: string }).error).toBe(COPY.embeddingFailed);
+    expect(embedTexts).not.toHaveBeenCalled();
   });
 
   it('every provider down streams the providers-down copy', async () => {
@@ -609,5 +641,107 @@ describe('chat routes', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('Site fins');
     expect(await readQuota(db, railKey('chat_ip', IP, NOW), NOW)).toBe(1);
+  });
+});
+
+function eventProps(name: string): Record<string, unknown>[] {
+  return vi
+    .mocked(captureServer)
+    .mock.calls.filter(([event]) => event === name)
+    .map(([, props]) => props as Record<string, unknown>);
+}
+
+describe('LLM analytics events', () => {
+  const EMBED_META = { surface: 'embed' as const, userAgent: 'TestAgent/1.0', origin: null, referer: null, host: null };
+
+  it('a turn sends $ai_embedding and $ai_generation with PostHog\'s properties, traced by chat id', async () => {
+    const agent = await makeAgent('reef.example');
+    await insertChunksWithinCeiling(
+      db,
+      agent.id,
+      [{ url: CHUNK_URL, title: 'Fins', pos: 0, content: 'Sharks have fins.', embedding: fakeEmbedding(1) }],
+      LIMITS.maxTotalChunks,
+    );
+    const good = new MockLanguageModelV4({
+      modelId: 'gpt-oss-120b',
+      doStream: async () => ({ stream: streamOf(answerParts('Sharks love docs')) }),
+    });
+    vi.mocked(buildChain).mockReturnValue([{ name: 'cerebras', model: good }]);
+    const raw = JSON.stringify({
+      id: 'chat_abc-123',
+      hostDomain: 'shop.example',
+      messages: [userMessage('Do sharks have fins?')],
+    });
+
+    const res = await handleChat({ agentId: agent.id, raw, ip: IP, meta: EMBED_META });
+    await res.text();
+
+    const [embedding] = eventProps('$ai_embedding');
+    expect(embedding).toMatchObject({
+      $ai_trace_id: 'chat_abc-123',
+      $ai_model: 'gemini-embedding-001',
+      $ai_provider: 'gemini',
+      $ai_base_url: 'https://generativelanguage.googleapis.com/v1beta',
+      $ai_input: 'Do sharks have fins?',
+      $ai_is_error: false,
+      agentId: agent.id,
+      domain: 'reef.example',
+      chat_surface: 'embed',
+      host_domain: 'shop.example',
+    });
+    expect(typeof embedding?.$ai_latency).toBe('number');
+
+    const generations = eventProps('$ai_generation');
+    expect(generations).toHaveLength(1);
+    const g = generations[0] as Record<string, unknown> & { $ai_input: { role: string; content: string }[] };
+    expect(g).toMatchObject({
+      $ai_trace_id: 'chat_abc-123',
+      $ai_model: 'gpt-oss-120b',
+      $ai_provider: 'cerebras',
+      $ai_base_url: 'https://api.cerebras.ai/v1',
+      $ai_output_choices: [{ role: 'assistant', content: 'Sharks love docs' }],
+      $ai_input_tokens: 30,
+      $ai_output_tokens: 12,
+      $ai_http_status: 200,
+      $ai_is_error: false,
+      agentId: agent.id,
+      domain: 'reef.example',
+      chat_surface: 'embed',
+      host_domain: 'shop.example',
+    });
+    expect(g.$ai_input[0]?.role).toBe('system');
+    expect(g.$ai_input[0]?.content).toContain('You are Sammy for the test reef.');
+    expect(g.$ai_input[0]?.content).toContain('Sharks have fins.');
+    expect(g.$ai_input.slice(1)).toEqual([{ role: 'user', content: 'Do sharks have fins?' }]);
+    // Seconds, not milliseconds.
+    expect(g.$ai_latency).toEqual(expect.any(Number));
+    expect(g.$ai_latency as number).toBeLessThan(60);
+    // chat_completed is unchanged alongside.
+    expect(completedEvents()).toHaveLength(1);
+  });
+
+  it('without a usable chat id each turn gets its own trace id', async () => {
+    const agent = await makeAgent('reef.example');
+    useModel(answerParts('ok'));
+    for (const id of [undefined, 'bad id with spaces']) {
+      const res = await handleChat({ agentId: agent.id, raw: JSON.stringify({ id, messages: [userMessage('hi')] }), ip: IP });
+      await res.text();
+    }
+    const traces = eventProps('$ai_generation').map((p) => p.$ai_trace_id);
+    expect(traces).toHaveLength(2);
+    expect(traces[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(traces[1]).not.toBe(traces[0]);
+  });
+
+  it('a failed question embedding still sends $ai_embedding, marked as an error, and no generation', async () => {
+    const agent = await makeAgent('reef.example');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(embedTexts).mockRejectedValue(new Error('Gemini embeddings failed with HTTP 503'));
+
+    await handleChat({ agentId: agent.id, raw: body([userMessage('hi')]), ip: IP });
+
+    errorSpy.mockRestore();
+    expect(eventProps('$ai_embedding')[0]).toMatchObject({ $ai_is_error: true, $ai_input: 'hi' });
+    expect(eventProps('$ai_generation')).toHaveLength(0);
   });
 });

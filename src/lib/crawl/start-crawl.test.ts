@@ -66,6 +66,24 @@ describe('continueCrawl', () => {
     expect(await continueCrawl(db, agent, NOW, limits)).toBe(true);
   });
 
+  it('skips the lock write while the crawl made progress in the last 10 s', async () => {
+    const recent = { ...agent, crawlProgressAt: new Date(NOW.getTime() - 5_000) };
+    expect(await continueCrawl(db, recent, NOW, limits)).toBe(false);
+    expect(background).not.toHaveBeenCalled();
+    expect(await tryLockCrawl(db, agent.id, NOW, limits)).toBe(true);
+    await releaseCrawlLock(db, agent.id);
+    const quiet = { ...agent, crawlProgressAt: new Date(NOW.getTime() - 11_000) };
+    expect(await continueCrawl(db, quiet, NOW, limits)).toBe(true);
+  });
+
+  it('releases the lock when the slice cannot be scheduled', async () => {
+    background.mockImplementationOnce(() => {
+      throw new Error('after() unavailable');
+    });
+    await expect(continueCrawl(db, agent, NOW, limits)).rejects.toThrow('after() unavailable');
+    expect(await tryLockCrawl(db, agent.id, NOW, limits)).toBe(true);
+  });
+
   it('does nothing for an agent that is not crawling', async () => {
     expect(await continueCrawl(db, { ...agent, status: 'ready' }, NOW, limits)).toBe(false);
     expect(await continueCrawl(db, { ...agent, status: 'failed' }, NOW, limits)).toBe(false);

@@ -1,6 +1,7 @@
 import type { Db } from '@/lib/db/client';
 import { incrementQuota, readQuota } from '@/lib/db/quota';
 import type { Limits } from '@/lib/config';
+import { EmbeddingQuotaError } from '@/lib/embedding-errors';
 
 export type RailName =
   | 'create_ip'
@@ -8,7 +9,8 @@ export type RailName =
   | 'capacity'
   | 'chat_ip'
   | 'chat_tokens'
-  | 'firecrawl_daily';
+  | 'firecrawl_daily'
+  | 'embed_daily';
 
 export const RAIL_COPY: Record<RailName, string> = {
   create_ip: 'Whoa, slow your swim! You can make 3 Sammys an hour — try again soon.',
@@ -18,6 +20,7 @@ export const RAIL_COPY: Record<RailName, string> = {
   chat_tokens: 'The free demo is resting until tomorrow',
   // Internal: never shown, it only skips the Firecrawl fallback.
   firecrawl_daily: '',
+  embed_daily: 'Sammy has read all it can for today — the free demo resets tomorrow.',
 };
 
 export interface RailBlocked {
@@ -59,6 +62,8 @@ export function railKey(rail: CountedRail | 'chat_tokens', ip: string, now: Date
       return `global:chat_tokens:${day(now)}`;
     case 'firecrawl_daily':
       return `global:firecrawl:${day(now)}`;
+    case 'embed_daily':
+      return `global:embed_requests:${day(now)}`;
   }
 }
 
@@ -78,6 +83,8 @@ function limitFor(rail: CountedRail, limits: Limits): number {
       return limits.maxCrawlsPerDay;
     case 'firecrawl_daily':
       return limits.maxFirecrawlPerDay;
+    case 'embed_daily':
+      return limits.maxEmbedRequestsPerDay;
   }
 }
 
@@ -91,6 +98,17 @@ export async function checkRail(
 ): Promise<RailResult> {
   const count = await incrementQuota(db, railKey(rail, subject.ip, now), 1, expiry(rail, now), now);
   return count > limitFor(rail, limits) ? blocked(rail) : { ok: true };
+}
+
+/**
+ * The `beforeRequest` gate for embeddings: counts one provider request against the daily
+ * embedding rail and throws EmbeddingQuotaError once it is spent.
+ */
+export function embedRequestGate(db: Db, limits: Limits): () => Promise<void> {
+  return async () => {
+    const result = await checkRail(db, 'embed_daily', { ip: 'global' }, new Date(), limits);
+    if (!result.ok) throw new EmbeddingQuotaError(result.message);
+  };
 }
 
 /** Read-only: blocks once the day's chat token budget is spent. */

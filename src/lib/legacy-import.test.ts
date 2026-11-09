@@ -279,7 +279,11 @@ describe('importLegacyAgents', () => {
         statusesSeen.push(String((await getAgentById(db, id))?.status));
         return { ...outcome, status: 'crawling' };
       })
-      .mockImplementationOnce(async () => outcome);
+      .mockImplementationOnce(async (id) => {
+        // The lock was renewed for this slice and is still held.
+        expect(await tryLockCrawl(db, id, NOW, limits)).toBe(false);
+        return outcome;
+      });
 
     const [r] = await importLegacyAgents(db, [legacy({ uuid: ID_A, domain: 'a.example' })], { ...opts, crawl: true });
 
@@ -291,19 +295,21 @@ describe('importLegacyAgents', () => {
     expect(await tryLockCrawl(db, ID_A, NOW, limits)).toBe(true);
   });
 
-  it('leaves a ready row and an owned failed row alone', async () => {
-    await importLegacyAgents(db, [legacy({ uuid: ID_A, domain: 'a.example' }), legacy({ uuid: ID_B, domain: 'b.example' })], opts);
+  it('leaves ready rows, owned rows and rows that failed for another reason alone', async () => {
+    const all = [
+      legacy({ uuid: ID_A, domain: 'a.example' }),
+      legacy({ uuid: ID_B, domain: 'b.example' }),
+      legacy({ uuid: ID_C, domain: 'c.example' }),
+    ];
+    await importLegacyAgents(db, all, opts);
     await finishCrawl(db, ID_A, { status: 'ready', lastError: null });
-    await finishCrawl(db, ID_B, { status: 'failed', lastError: 'x' });
+    await finishCrawl(db, ID_B, { status: 'failed', lastError: 're-embedding required' });
     await db.query(`UPDATE agents SET owner_token_hash = 'hash' WHERE id = $1`, [ID_B]);
+    await finishCrawl(db, ID_C, { status: 'failed', lastError: "Sammy couldn't read any pages" });
 
-    const results = await importLegacyAgents(
-      db,
-      [legacy({ uuid: ID_A, domain: 'a.example' }), legacy({ uuid: ID_B, domain: 'b.example' })],
-      { ...opts, crawl: true },
-    );
+    const results = await importLegacyAgents(db, all, { ...opts, crawl: true });
 
-    expect(results.map((r) => r.action)).toEqual(['exists', 'exists']);
+    expect(results.map((r) => r.action)).toEqual(['exists', 'exists', 'exists']);
     expect(crawl).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EMBEDDING_CONFIG } from '@/lib/config';
 import { embedTexts } from './embeddings';
+import { EmbeddingQuotaError, EmbeddingRateLimitError } from './embedding-errors';
 import { l2Normalize, MAX_BATCH_TOKENS, planBatches, retryDelayMs } from './embeddings-gemini';
 
 interface GeminiRequest {
@@ -62,8 +63,14 @@ describe('Gemini embedding config', () => {
     vi.stubEnv('EMBEDDING_PROVIDER', 'gemini');
     vi.stubEnv('EMBEDDING_DIMS', '1536');
     expect(EMBEDDING_CONFIG.dimensions).toBe(1536);
-    vi.stubEnv('EMBEDDING_DIMS', '5000');
+    vi.stubEnv('EMBEDDING_DIMS', '3072');
+    expect(EMBEDDING_CONFIG.dimensions).toBe(3072);
+    // Above Gemini's 3072 (though halfvec could hold it): back to the default.
+    vi.stubEnv('EMBEDDING_DIMS', '4000');
     expect(EMBEDDING_CONFIG.dimensions).toBe(768);
+    vi.stubEnv('EMBEDDING_PROVIDER', 'nvidia');
+    expect(EMBEDDING_CONFIG.dimensions).toBe(4000);
+    vi.stubEnv('EMBEDDING_PROVIDER', 'gemini');
     vi.stubEnv('EMBEDDING_BATCH_SIZE', '500');
     expect(EMBEDDING_CONFIG.batchSize).toBe(100);
   });
@@ -120,29 +127,88 @@ describe('embedTexts with Gemini', () => {
   it('caps a request by estimated tokens to stay under the free-tier tokens per minute', () => {
     const big = 'x'.repeat(3200); // ~800 tokens, a full chunk
     const batches = planBatches(Array.from({ length: 60 }, () => big), 100, MAX_BATCH_TOKENS);
-    expect(batches.map((b) => b.length)).toEqual([25, 25, 10]);
+    // 8k estimated tokens = 10 full chunks per request.
+    expect(batches.map((b) => b.length)).toEqual([10, 10, 10, 10, 10, 10]);
     // A single text larger than the budget still goes alone.
     expect(planBatches(['y'.repeat(MAX_BATCH_TOKENS * 8)], 100, MAX_BATCH_TOKENS)).toHaveLength(1);
   });
 
-  it('falls back to one input per request when a batch gets a 4xx or 5xx', async () => {
-    for (const failing of [400, 500]) {
-      fetchMock.mockReset();
-      fetchMock.mockImplementation(async (url, init) => {
-        const requests = requestsOf([url, init]);
-        return requests.length > 1 ? new Response('{}', { status: failing }) : geminiOk(requests);
-      });
+  it('falls back to one input per request when a batch gets a 5xx', async () => {
+    fetchMock.mockImplementation(async (url, init) => {
+      const requests = requestsOf([url, init]);
+      return requests.length > 1 ? new Response('{}', { status: 500 }) : geminiOk(requests);
+    });
 
-      const vectors = await embedTexts(['text 0', 'text 1', 'text 2'], 'passage');
+    const vectors = await embedTexts(['text 0', 'text 1', 'text 2'], 'passage');
 
-      expect(vectors).toHaveLength(3);
-      expect(fetchMock.mock.calls.map((c) => requestsOf(c).length)).toEqual([3, 1, 1, 1]);
-      expect(fetchMock.mock.calls.slice(1).map((c) => requestsOf(c)[0].content.parts[0].text)).toEqual([
-        'text 0',
-        'text 1',
-        'text 2',
-      ]);
-    }
+    expect(vectors).toHaveLength(3);
+    expect(fetchMock.mock.calls.map((c) => requestsOf(c).length)).toEqual([3, 1, 1, 1]);
+    expect(fetchMock.mock.calls.slice(1).map((c) => requestsOf(c)[0].content.parts[0].text)).toEqual([
+      'text 0',
+      'text 1',
+      'text 2',
+    ]);
+  });
+
+  it('a 4xx batch fails as it is (no single-input retries)', async () => {
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 400 }));
+    await expect(embedTexts(['text 0', 'text 1'], 'passage')).rejects.toThrow('HTTP 400');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls beforeRequest before every request and stops when it refuses', async () => {
+    fetchMock.mockImplementation(async (url, init) => geminiOk(requestsOf([url, init])));
+    let allowed = 2;
+    const beforeRequest = vi.fn(async () => {
+      if (allowed-- <= 0) throw new EmbeddingQuotaError('spent');
+    });
+    const texts = Array.from({ length: 250 }, (_, i) => `text ${i}`);
+
+    await expect(embedTexts(texts, 'passage', { beforeRequest })).rejects.toBeInstanceOf(EmbeddingQuotaError);
+    expect(beforeRequest).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a 429 that outlasts the retries is an EmbeddingRateLimitError', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 429 }));
+    const pending = embedTexts(['text 0'], 'passage');
+    const outcome = expect(pending).rejects.toBeInstanceOf(EmbeddingRateLimitError);
+    await vi.advanceTimersByTimeAsync(10 * 30_000);
+    await outcome;
+    expect(fetchMock).toHaveBeenCalledTimes(7);
+  });
+
+  it('a question retries once after a network error, then gives up', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'));
+    fetchMock.mockImplementationOnce(async (url, init) => geminiOk(requestsOf([url, init])));
+    expect(await embedTexts(['text 0'], 'query')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    await expect(embedTexts(['text 0'], 'query')).rejects.toThrow('fetch failed');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a question times out each request after 5 s', async () => {
+    fetchMock.mockImplementation(async (url, init) => {
+      const signal = (init as RequestInit).signal as AbortSignal;
+      await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason)));
+      return geminiOk(requestsOf([url, init]));
+    });
+    const started = Date.now();
+    await expect(embedTexts(['text 0'], 'query')).rejects.toThrow();
+    // Two 5 s attempts, inside the 12 s question budget.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(9_500);
+    expect(Date.now() - started).toBeLessThan(12_500);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  }, 20_000);
+
+  it('a crawl page gets no network retry: the slice decides', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    await expect(embedTexts(['text 0'], 'passage')).rejects.toThrow('fetch failed');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('waits Google\'s retryDelay after a 429 and retries the same batch', async () => {

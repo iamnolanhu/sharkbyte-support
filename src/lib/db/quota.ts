@@ -41,6 +41,11 @@ export async function acquireLock(db: Db, key: string, now: Date, ttlMs: number)
   return rows.length > 0;
 }
 
+/** Pushes a held lock's expiry out by `ttlMs` (a long holder working in steps). */
+export async function renewLock(db: Db, key: string, now: Date, ttlMs: number): Promise<void> {
+  await db.query('UPDATE locks SET expires_at = $2 WHERE key = $1', [key, new Date(now.getTime() + ttlMs).toISOString()]);
+}
+
 export async function releaseLock(db: Db, key: string): Promise<void> {
   await db.query('DELETE FROM locks WHERE key = $1', [key]);
 }

@@ -43,11 +43,19 @@ export function schemaStatements(dims: number): readonly string[] {
     `CREATE TABLE IF NOT EXISTS quota (key text PRIMARY KEY, count bigint NOT NULL, expires_at timestamptz NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS locks (key text PRIMARY KEY, expires_at timestamptz NOT NULL)`,
     // Resumable crawls: the URLs still to read (NULL until discovery), pages given up on,
-    // slices run so far, and when the crawl last made progress (stall detection).
-    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS crawl_pending text[]`,
-    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS crawl_skipped int NOT NULL DEFAULT 0`,
-    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS crawl_slices int NOT NULL DEFAULT 0`,
-    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS crawl_progress_at timestamptz`,
+    // slices run so far, and when the crawl last made progress (stall detection). Checked
+    // first, so a cold start does not take ALTER TABLE's exclusive lock once they exist.
+    `DO $add_crawl_columns$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'agents' AND column_name = 'crawl_progress_at') THEN
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS crawl_pending text[];
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS crawl_skipped int NOT NULL DEFAULT 0;
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS crawl_slices int NOT NULL DEFAULT 0;
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS crawl_progress_at timestamptz;
+  END IF;
+END
+$add_crawl_columns$`,
   ];
 }
 
@@ -65,8 +73,10 @@ export const EMBEDDING_DIMS_PROBE = `SELECT
 
 /**
  * When chunks.embedding is not halfvec(dims): empties chunks (vectors of another model or size
- * cannot be compared), resizes the column, and marks every agent that is not crawling `failed`
- * with REEMBED_REQUIRED_ERROR so it gets re-crawled. A no-op when the size already matches.
+ * cannot be compared), resizes the column, marks every agent that is not crawling `failed`
+ * with REEMBED_REQUIRED_ERROR so it gets re-crawled, and resets the progress of crawling ones
+ * (their stored pages are gone). A no-op when the size already matches. Only run with
+ * EMBEDDING_DIMS_MIGRATE=1 (see applySchema).
  */
 export function embeddingDimsMigration(dims: number): string {
   assertDims(dims);
@@ -77,6 +87,8 @@ BEGIN
     ALTER TABLE chunks ALTER COLUMN embedding TYPE halfvec(${dims}) USING NULL;
     UPDATE agents SET status = 'failed', last_error = '${REEMBED_REQUIRED_ERROR}', chunk_count = 0, crawl_pending = NULL
       WHERE status <> 'crawling';
+    UPDATE agents SET chunk_count = 0, pages_crawled = 0, crawl_pending = NULL, crawl_slices = 0, crawl_skipped = 0
+      WHERE status = 'crawling';
   END IF;
 END
 $migrate$`;

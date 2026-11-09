@@ -11,7 +11,8 @@ describe('getLimits', () => {
       l.maxCrawlsPerDay,
       l.maxChatTokensPerDay,
       l.maxFirecrawlPerDay,
-    ]).toEqual([30, 300, 40000, 50, 500000, 50]);
+    ]).toEqual([30, 300, 40000, 20, 500000, 50]);
+    expect(l.maxEmbedRequestsPerDay).toBe(900);
     expect(l.retentionDays).toBe(14);
     expect(l.crawlMaxDurationS).toBe(300);
     expect(l.maxInstructionChars).toBe(4000);

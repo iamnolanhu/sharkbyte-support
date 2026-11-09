@@ -1,22 +1,27 @@
+import { randomUUID } from 'node:crypto';
 import { createUIMessageStreamResponse, streamText, toUIMessageStream, type UIMessageChunk } from 'ai';
 import { captureServer } from '@/lib/analytics/server';
 import { apiError, COPY, rateLimited } from '@/lib/agent-api';
-import { APP_DOMAIN, getLimits, getLlmEnv, type Limits } from '@/lib/config';
+import { APP_DOMAIN, EMBEDDING_CONFIG, getLimits, getLlmEnv, type Limits, type ProviderName } from '@/lib/config';
 import { getAgentById, touchLastUsed } from '@/lib/db/agents';
 import { searchChunks } from '@/lib/db/chunks';
-import { getDb } from '@/lib/db/client';
+import { embeddingSizeMismatch, getDb } from '@/lib/db/client';
+import { EmbeddingQuotaError } from '@/lib/embedding-errors';
 import { estimateTokens } from '@/lib/crawl/chunk';
 import { embedTexts } from '@/lib/embeddings';
 import { createFallbackModel } from '@/lib/llm/fallback-model';
-import { buildChain } from '@/lib/llm/providers';
+import { buildChain, providerBaseUrl } from '@/lib/llm/providers';
 import {
+  aiEmbeddingProperties,
+  aiGenerationProperties,
   chatEventProperties,
   hashVisitor,
   sanitizeHostDomain,
+  sanitizeTraceId,
   type ChatEventInput,
   type ChatRequestMeta,
 } from '@/lib/chat/chat-event';
-import { addChatTokens, checkChatTokenBudget, checkRail } from '@/lib/rails';
+import { addChatTokens, checkChatTokenBudget, checkRail, embedRequestGate, RAIL_COPY } from '@/lib/rails';
 import type { RetrievedChunk } from '@/types';
 
 export interface ChatTurn {
@@ -90,12 +95,11 @@ export interface HandleChatInput {
 
 const SITE_META: ChatRequestMeta = { surface: 'site', userAgent: null, origin: null, referer: null, host: null };
 
-/** The embedding page's host the widget reports in its body; only the widget route trusts it. */
-function readHostDomain(raw: string, meta: ChatRequestMeta): string | null {
-  if (meta.surface !== 'embed') return null;
+/** The request body as an object, or null (parseChatRequest has already validated it). */
+function readBody(raw: string): Record<string, unknown> | null {
   try {
     const body: unknown = JSON.parse(raw);
-    return isRecord(body) ? sanitizeHostDomain(body.hostDomain) : null;
+    return isRecord(body) ? body : null;
   } catch {
     return null;
   }
@@ -119,7 +123,17 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
   const { turns } = parsed;
   const question = (turns.at(-1) as ChatTurn).content;
   const visitorId = hashVisitor(ip, meta.userAgent);
-  const hostDomain = readHostDomain(raw, meta);
+  const body = readBody(raw);
+  // The embedding page's host the widget reports in its body; only the widget route trusts it.
+  const hostDomain = meta.surface === 'embed' ? sanitizeHostDomain(body?.hostDomain) : null;
+  // LLM analytics: one trace per chat (the AI SDK sends the chat id), else one per turn.
+  const aiContext = {
+    traceId: sanitizeTraceId(body?.id) ?? randomUUID(),
+    agentId: agent.id,
+    domain: agent.domain,
+    meta,
+    hostDomain,
+  };
   const reportTurn = (fields: Partial<ChatEventInput> & Pick<ChatEventInput, 'outcome'>) =>
     captureServer(
       'chat_completed',
@@ -153,27 +167,60 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
     return rateLimited(budget, corsHeaders);
   }
 
+  // Analytics and token accounting finish before the response body closes,
+  // so the serverless function is still alive to send them.
+  const pending: Promise<unknown>[] = [];
+
+  // Stored vectors of another size cannot be searched (see EMBEDDING_DIMS_MIGRATE).
+  const mismatch = await embeddingSizeMismatch(db);
+  if (mismatch) {
+    console.error(`Chat cannot search: ${mismatch}`);
+    await reportTurn({ outcome: 'embedding_error' });
+    return apiError(503, COPY.embeddingFailed, corsHeaders);
+  }
+
   let embedding: number[] | undefined;
+  let embedQuotaSpent = false;
+  const embedStartedAt = Date.now();
   try {
-    [embedding] = await embedTexts([question], 'query');
+    [embedding] = await embedTexts([question], 'query', { beforeRequest: embedRequestGate(db, limits) });
   } catch (error) {
-    console.error('Could not embed the chat question', error);
+    if (error instanceof EmbeddingQuotaError) embedQuotaSpent = true;
+    else console.error('Could not embed the chat question', error);
+  }
+  pending.push(
+    captureServer(
+      '$ai_embedding',
+      aiEmbeddingProperties({
+        ...aiContext,
+        provider: EMBEDDING_CONFIG.provider,
+        model: EMBEDDING_CONFIG.model,
+        baseUrl: EMBEDDING_CONFIG.baseUrl,
+        question,
+        latencyMs: Date.now() - embedStartedAt,
+        failed: !embedding,
+      }),
+      visitorId,
+    ),
+  );
+  if (embedQuotaSpent) {
+    pending.push(reportTurn({ outcome: 'rate_limited' }));
+    await Promise.allSettled(pending);
+    return rateLimited({ ok: false, rail: 'embed_daily', message: RAIL_COPY.embed_daily }, corsHeaders);
   }
   if (!embedding) {
-    await reportTurn({ outcome: 'provider_error' });
-    return apiError(503, COPY.providersDown, corsHeaders);
+    pending.push(reportTurn({ outcome: 'embedding_error' }));
+    await Promise.allSettled(pending);
+    return apiError(503, COPY.embeddingFailed, corsHeaders);
   }
 
   const chunks = await searchChunks(db, agent.id, embedding, limits.retrievalTopK);
   await touchLastUsed(db, agent.id, now);
   const system = buildSystemPrompt(agent.instruction, chunks);
 
-  // Analytics and token accounting finish before the response body closes,
-  // so the serverless function is still alive to send them.
-  const pending: Promise<unknown>[] = [];
   const turn = {
     answer: '',
-    provider: null as string | null,
+    provider: null as ProviderName | null,
     model: null as string | null,
     promptTokens: null as number | null,
     completionTokens: null as number | null,
@@ -197,6 +244,7 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
     },
   });
 
+  const llmStartedAt = Date.now();
   const result = streamText({
     model,
     system,
@@ -241,6 +289,23 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
             retrievedChunks: chunks.length,
             fallbackCount: turn.fallbackCount,
           }),
+          captureServer(
+            '$ai_generation',
+            aiGenerationProperties({
+              ...aiContext,
+              provider: turn.provider,
+              model: turn.model,
+              baseUrl: turn.provider ? providerBaseUrl(turn.provider) : null,
+              system,
+              turns,
+              answer: turn.answer,
+              inputTokens: turn.promptTokens,
+              outputTokens: turn.completionTokens,
+              latencyMs: Date.now() - llmStartedAt,
+              failed: turn.failed,
+            }),
+            visitorId,
+          ),
         );
         await Promise.allSettled(pending);
       },

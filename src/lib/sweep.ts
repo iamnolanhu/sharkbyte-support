@@ -3,6 +3,7 @@ import type { Limits } from '@/lib/config';
 import { RAIL_COPY, type RailResult } from '@/lib/rails';
 import { chunksTableBytes, countAllChunks } from '@/lib/db/chunks';
 import { deleteExpiredLocks, deleteExpiredQuota } from '@/lib/db/quota';
+import { REEMBED_REQUIRED_ERROR } from '@/lib/db/schema';
 
 export interface SweepResult {
   stalledCrawlsFinished: number;
@@ -45,14 +46,18 @@ async function clearFailedChunks(db: Db): Promise<void> {
   ]);
 }
 
-/** Deletes unpinned agents last used before `cutoff`: failed ones only, or any that is not crawling. */
+/**
+ * Deletes unpinned agents last used before `cutoff`: failed ones only, or any that is not crawling.
+ * Agents an embedding migration emptied are not failures of their own: they wait for a re-crawl
+ * under the idle rule, never the short failed-agent rule.
+ */
 async function deleteIdleAgents(db: Db, cutoff: Date, onlyFailed: boolean): Promise<number> {
   const rows = await db.query<{ id: string }>(
     `DELETE FROM agents
      WHERE pinned = false AND last_used_at < $1
-       AND ${onlyFailed ? `status = 'failed'` : `status <> 'crawling'`}
+       AND ${onlyFailed ? `status = 'failed' AND last_error IS DISTINCT FROM $2` : `status <> 'crawling'`}
      RETURNING id`,
-    [cutoff],
+    onlyFailed ? [cutoff, REEMBED_REQUIRED_ERROR] : [cutoff],
   );
   return rows.length;
 }

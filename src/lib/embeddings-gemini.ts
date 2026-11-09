@@ -7,15 +7,18 @@
  * Free-tier limits are roughly 100 requests/min, 30k tokens/min and 1,000 requests/day per
  * Google Cloud project, so batches are capped by an estimated token count as well as by
  * EMBEDDING_CONFIG.batchSize (the API's maximum is 100), and a 429 waits (Google's retryDelay
- * when it sends one) and tries again.
+ * when it sends one) and tries again; a 429 that outlasts the retries is an EmbeddingRateLimitError.
  */
 
 import { EMBEDDING_CONFIG } from './config';
+import { EmbeddingRateLimitError } from './embedding-errors';
 import type { EmbedFn, EmbedInputType, EmbedOptions } from './embeddings';
 
-/** Estimated tokens per request: stays under the 30k tokens/min free-tier budget with room for a second caller. */
-export const MAX_BATCH_TOKENS = 20_000;
-const REQUEST_TIMEOUT_MS = 20_000;
+/**
+ * Estimated tokens per request: about 10 full chunks, so the six pages a crawl reads in
+ * parallel stay near the 30k tokens/min free-tier budget instead of far past it.
+ */
+export const MAX_BATCH_TOKENS = 8_000;
 const SERVER_ERROR_RETRY_MS = 1_000;
 
 interface RetryPolicy {
@@ -23,12 +26,16 @@ interface RetryPolicy {
   maxRetries: number;
   /** Longest single wait after a 429. */
   maxWaitMs: number;
+  /** Per request. */
+  timeoutMs: number;
+  /** Retries after a timeout or network error (never after the caller aborted). */
+  networkRetries: number;
 }
 
 /** Crawls run in the background with a time budget; a chat question cannot wait long. */
 const RETRY_POLICY: Readonly<Record<EmbedInputType, RetryPolicy>> = {
-  passage: { maxRetries: 6, maxWaitMs: 30_000 },
-  query: { maxRetries: 2, maxWaitMs: 5_000 },
+  passage: { maxRetries: 6, maxWaitMs: 30_000, timeoutMs: 20_000, networkRetries: 0 },
+  query: { maxRetries: 2, maxWaitMs: 5_000, timeoutMs: 5_000, networkRetries: 1 },
 };
 
 const TASK_TYPE: Readonly<Record<EmbedInputType, string>> = {
@@ -117,6 +124,7 @@ interface BatchContext {
   model: string;
   dims: number;
   signal?: AbortSignal;
+  beforeRequest?: () => Promise<void>;
 }
 
 class GeminiHttpError extends Error {
@@ -141,16 +149,26 @@ async function requestBatch(texts: string[], ctx: BatchContext): Promise<number[
   });
   const policy = RETRY_POLICY[ctx.inputType];
   let rateLimitRetries = 0;
+  let networkRetries = 0;
   let serverRetried = false;
   for (;;) {
     ctx.signal?.throwIfAborted();
-    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-    const res = await fetch(`${EMBEDDING_CONFIG.baseUrl}/${modelPath}:batchEmbedContents`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': ctx.apiKey },
-      body,
-      signal: ctx.signal ? AbortSignal.any([timeout, ctx.signal]) : timeout,
-    });
+    await ctx.beforeRequest?.();
+    let res: Response;
+    try {
+      const timeout = AbortSignal.timeout(policy.timeoutMs);
+      res = await fetch(`${EMBEDDING_CONFIG.baseUrl}/${modelPath}:batchEmbedContents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': ctx.apiKey },
+        body,
+        signal: ctx.signal ? AbortSignal.any([timeout, ctx.signal]) : timeout,
+      });
+    } catch (err) {
+      // A timeout or network error; the caller's own abort is final.
+      if (ctx.signal?.aborted || networkRetries >= policy.networkRetries) throw err;
+      networkRetries++;
+      continue;
+    }
     if (res.ok) return parseVectors(await res.json(), texts.length, ctx.dims);
     if (res.status === 429 && rateLimitRetries < policy.maxRetries) {
       const suggested = retryDelayMs(await res.json().catch(() => null));
@@ -160,6 +178,7 @@ async function requestBatch(texts: string[], ctx: BatchContext): Promise<number[
       continue;
     }
     await res.body?.cancel().catch(() => undefined);
+    if (res.status === 429) throw new EmbeddingRateLimitError('Gemini embeddings failed with HTTP 429');
     if (res.status >= 500 && texts.length === 1 && !serverRetried) {
       serverRetried = true;
       await sleep(SERVER_ERROR_RETRY_MS, ctx.signal);
@@ -169,12 +188,12 @@ async function requestBatch(texts: string[], ctx: BatchContext): Promise<number[
   }
 }
 
-/** A batch that fails with any 4xx/5xx other than 429 is retried one input at a time. */
+/** A batch that fails with a 5xx is retried one input at a time; a 4xx is the request's own fault. */
 async function embedBatch(texts: string[], ctx: BatchContext): Promise<number[][]> {
   try {
     return await requestBatch(texts, ctx);
   } catch (err) {
-    if (!(err instanceof GeminiHttpError) || err.status === 429 || texts.length === 1) throw err;
+    if (!(err instanceof GeminiHttpError) || err.status < 500 || texts.length === 1) throw err;
     const vectors: number[][] = [];
     for (const text of texts) vectors.push(...(await requestBatch([text], ctx)));
     return vectors;
@@ -191,6 +210,7 @@ export const embedTextsGemini: EmbedFn = async (texts, inputType, options: Embed
     model: EMBEDDING_CONFIG.model,
     dims: EMBEDDING_CONFIG.dimensions,
     signal: options.signal,
+    beforeRequest: options.beforeRequest,
   };
   const vectors: number[][] = [];
   for (const batch of planBatches(texts, EMBEDDING_CONFIG.batchSize, MAX_BATCH_TOKENS)) {

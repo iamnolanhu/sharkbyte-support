@@ -9,7 +9,7 @@ export function isUuid(s: string): boolean {
 }
 
 const AGENT_COLUMNS = `id, domain, url, name, instruction, status, pages_crawled, pages_total,
-  chunk_count, created_at, last_used_at, crawl_started_at, last_error, pinned, owner_token_hash`;
+  chunk_count, created_at, last_used_at, crawl_started_at, crawl_progress_at, last_error, pinned, owner_token_hash`;
 
 interface AgentDbRow {
   id: string;
@@ -24,6 +24,7 @@ interface AgentDbRow {
   created_at: Date | string;
   last_used_at: Date | string;
   crawl_started_at: Date | string | null;
+  crawl_progress_at: Date | string | null;
   last_error: string | null;
   pinned: boolean;
   owner_token_hash: string | null;
@@ -45,6 +46,7 @@ function toAgentRow(r: AgentDbRow): AgentRow {
     createdAt: toDate(r.created_at),
     lastUsedAt: toDate(r.last_used_at),
     crawlStartedAt: r.crawl_started_at === null ? null : toDate(r.crawl_started_at),
+    crawlProgressAt: r.crawl_progress_at === null ? null : toDate(r.crawl_progress_at),
     lastError: r.last_error,
     pinned: r.pinned,
     ownerTokenHash: r.owner_token_hash,

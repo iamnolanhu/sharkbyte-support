@@ -50,15 +50,17 @@ PostHog project key is the only public one.
 | `EMBEDDING_MODEL` | no | `gemini-embedding-001` (nvidia: `nvidia/nemotron-3.5-embed-1b`) | Embedding model; changing it means re-crawling every agent |
 | `EMBEDDING_DIMS` | no | `768` (nvidia: `1024`) | Vector size stored in `chunks.embedding` (up to 4000); a change re-embeds everything, see below |
 | `EMBEDDING_BATCH_SIZE` | no | `100` (nvidia: `1`) | Inputs per embeddings request (Gemini up to 100, NVIDIA up to 32) |
+| `EMBEDDING_DIMS_MIGRATE` | no | unset | `1` for ONE deploy after changing the embedding size: empties stored vectors and resizes them (see below); remove it afterwards |
 | `FIRECRAWL_API_KEY` | no | | Firecrawl for JavaScript-rendered pages |
 | `APP_DOMAIN` | no | Vercel production URL | Public domain used in copy and the demo agent |
 | `CRON_SECRET` | no | | Bearer secret for `/api/cron/sweep`; without it the sweep refuses every call |
 | `MAX_PAGES_PER_AGENT` | no | `30` | Pages read per agent |
 | `MAX_CHUNKS_PER_AGENT` | no | `300` | Chunks stored per agent |
 | `MAX_TOTAL_CHUNKS` | no | `40000` | Chunks across all agents before the oldest are evicted |
-| `MAX_CRAWLS_PER_DAY` | no | `50` | New crawls per UTC day, app-wide |
+| `MAX_CRAWLS_PER_DAY` | no | `20` | New crawls per UTC day, app-wide |
 | `MAX_CHAT_TOKENS_PER_DAY` | no | `500000` | Chat tokens per UTC day, app-wide |
 | `MAX_FIRECRAWL_PER_DAY` | no | `50` | Firecrawl scrapes per UTC day, app-wide |
+| `MAX_EMBED_REQUESTS_PER_DAY` | no | `900` | Embedding provider requests per UTC day, app-wide (Gemini free tier: about 1,000) |
 | `POSTHOG_API_KEY` | no | | Server-side PostHog events |
 | `POSTHOG_HOST` | no | posthog-node default | Server-side PostHog host |
 | `NEXT_PUBLIC_POSTHOG_KEY` | no | | Browser PostHog: pageviews, autocapture and session replay on the site and inside the embed widget |
@@ -78,23 +80,38 @@ Nemotron model can spend the whole budget thinking and send no answer.
 
 **Embeddings.** Gemini's free tier allows about 100 requests a minute, 30,000 tokens a minute
 and 1,000 requests a day per Google Cloud project. Requests therefore carry at most 100 inputs
-and about 20,000 estimated tokens; a 429 waits (Google's `retryDelay` when it sends one) and
-tries again; a batch that fails any other way is retried one input at a time. Vectors are
+and about 8,000 estimated tokens; a 429 waits (Google's `retryDelay` when it sends one) and
+tries again; a batch that gets a 5xx is retried one input at a time. A chat question gets 5 s per
+request, one retry after a timeout or network error, and 12 s in all; when it fails the visitor
+sees "Sammy couldn't read your question — try again in a moment". Vectors are
 requested at `EMBEDDING_DIMS` and L2-normalised. On NVIDIA (`EMBEDDING_PROVIDER=nvidia`),
 `EMBEDDING_BATCH_SIZE` defaults to 1 because its hosted embedder fails most multi-input
 requests with HTTP 500; a batch that still fails is split in halves down to single inputs.
 
 **Changing the embedding size.** On the first request after a deploy, the schema compares
-`chunks.embedding` with `EMBEDDING_DIMS`. On a mismatch it empties `chunks`, resizes the column,
-marks every agent that is not crawling `failed` with "re-embedding required", and sends the
-server event `embedding_dims_migrated`. Owners re-crawl with **Repair** (anyone can by
-submitting the URL again); `scripts/import-legacy-agents.ts` re-crawls the unowned imported ones.
+`chunks.embedding` with `EMBEDDING_DIMS`. Without `EMBEDDING_DIMS_MIGRATE=1` a mismatch changes
+nothing: it is logged, sent as `embedding_dims_mismatch`, crawls fail with a message naming both
+sizes, and chat answers "Sammy couldn't read your question". With `EMBEDDING_DIMS_MIGRATE=1` it
+empties `chunks`, resizes the column, marks every agent that is not crawling `failed` with
+"re-embedding required" (crawling ones keep crawling from scratch), and sends
+`embedding_dims_migrated`. Agents waiting for re-embedding are kept past the 24-hour
+failed-agent rule (the 14-day idle rule still applies). Runbook:
+
+1. Before the push: `select count(*) from agents where status = 'crawling'` returns 0.
+2. Set `EMBEDDING_DIMS_MIGRATE=1` on the environment, push, wait for the deployment, and send
+   one request (any page) so the migration runs.
+3. Required: re-crawl the unowned imported agents with
+   `bun --env-file=<file> scripts/import-legacy-agents.ts <export.json>`; it re-crawls exactly
+   the rows marked "re-embedding required". Owners re-crawl their own with **Repair**, and
+   anyone can by submitting the URL again.
+4. Remove `EMBEDDING_DIMS_MIGRATE` from the environment.
 
 **Crawls run in slices.** At about 30,000 tokens a minute a large site needs longer than one
 function invocation, so each invocation starts new pages for 240 s, saves the URLs still to read
 on the agent row and leaves it `crawling`. The next status poll (the home page and dashboard
-poll every few seconds) starts the next slice when none is running. A crawl ends `ready` with
-what it stored after 6 slices.
+poll every few seconds) starts the next slice when none is running. A page that stays rate
+limited after every retry (or meets the spent daily embedding rail) stays on the list and ends
+the slice. A crawl ends `ready` with what it stored after 6 slices.
 
 **OpenRouter and Zero Data Retention:** OpenRouter's free models refuse accounts that enforce
 Zero Data Retention. Either allow non-ZDR providers for the key you use here, or drop
@@ -106,7 +123,9 @@ PostHog is off when its keys are unset; nothing else depends on it.
 server-side (the `chat_completed` event: question up to 2,000 characters, answer up to 4,000, the
 provider and model that answered, token counts, latency and outcome). Visitors appear only as a hashed id of
 their IP address and browser; the raw IP is never sent. Embedded chats also record
-the hostname of the page hosting the widget. When `NEXT_PUBLIC_POSTHOG_KEY` is set, the browser
+the hostname of the page hosting the widget. Each turn also sends PostHog LLM-analytics events:
+`$ai_generation` carries the full model input (the system prompt with the retrieved page text,
+and the conversation) and the answer, untruncated; `$ai_embedding` carries the question. When `NEXT_PUBLIC_POSTHOG_KEY` is set, the browser
 also records session replays and autocaptured clicks on every surface, the embed widget inside
 customer sites included, so chat content typed and shown in those sessions is recorded to PostHog
 too. Tell your visitors accordingly, or leave both keys unset to log nothing.
@@ -121,11 +140,12 @@ ocean-themed message and nothing is spent.
 | Rail | Limit | Knob | What the visitor sees |
 | --- | --- | --- | --- |
 | Creates per IP | 3 per hour | fixed | "Whoa, slow your swim! You can make 3 Sammys an hour — try again soon." |
-| Crawls per day | 50 per UTC day | `MAX_CRAWLS_PER_DAY` | "Sammy has explored enough reefs for today — the free demo resets tomorrow." |
+| Crawls per day | 20 per UTC day | `MAX_CRAWLS_PER_DAY` | "Sammy has explored enough reefs for today — the free demo resets tomorrow." |
 | Storage capacity | `MAX_TOTAL_CHUNKS` | `MAX_TOTAL_CHUNKS` | "The free demo is full right now — try again tomorrow" |
 | Chat messages per IP | 20 per minute | fixed | "Easy there, fast fins! Give Sammy a minute to catch up." |
 | Chat tokens per day | 500,000 per UTC day | `MAX_CHAT_TOKENS_PER_DAY` | "The free demo is resting until tomorrow" |
 | Firecrawl per day | 50 per UTC day | `MAX_FIRECRAWL_PER_DAY` | nothing: pages are read without Firecrawl |
+| Embedding requests per day | 900 per UTC day | `MAX_EMBED_REQUESTS_PER_DAY` | chat: "Sammy has read all it can for today — the free demo resets tomorrow."; crawls pause and keep their pages pending |
 
 Fixed bounds: a user message is at most 2,000 characters, the model sees the last 10 turns and
 answers in at most 600 tokens, and retrieval uses the top 6 chunks of that agent only.
@@ -149,7 +169,8 @@ The sweep:
 
 - finishes crawls with no progress for the function time limit plus 30 s (nobody polled to
   start the next slice): `ready` with what they stored, or `failed` when they stored nothing;
-- clears the chunks of failed agents and removes failed agents after 24 hours;
+- clears the chunks of failed agents and removes failed agents after 24 hours (except agents
+  waiting for re-embedding, which fall under the 14-day rule);
 - removes agents unused for 14 days;
 - while storage is above 80 % of `MAX_TOTAL_CHUNKS`, evicts the least recently used agents;
 - never touches an agent that is crawling or pinned (the site's own demo Sammy is pinned).

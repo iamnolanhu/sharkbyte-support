@@ -67,5 +67,6 @@ export const COPY = {
   busy: 'Sammy is already diving into that site — try again in a moment.',
   crawlStartFailed: 'The tide pulled Sammy back — try again in a moment.',
   providersDown: PROVIDERS_DOWN_COPY,
+  embeddingFailed: "Sammy couldn't read your question — try again in a moment",
   tooLong: 'That message is a whale — keep it under 2,000 characters.',
 } as const;

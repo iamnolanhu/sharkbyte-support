@@ -19,10 +19,11 @@ import {
   updateCrawlProgress,
 } from '@/lib/db/agents';
 import { chunksTableBytes, insertChunksWithinCeiling } from '@/lib/db/chunks';
-import { getDb, type Db } from '@/lib/db/client';
+import { embeddingSizeMismatch, getDb, type Db } from '@/lib/db/client';
+import { EmbeddingRateLimitError } from '@/lib/embedding-errors';
 import { embedTexts, type EmbedFn } from '@/lib/embeddings';
 import { scrapeUrl, type ScrapeResult } from '@/lib/firecrawl';
-import { RAIL_COPY, checkRail } from '@/lib/rails';
+import { RAIL_COPY, checkRail, embedRequestGate } from '@/lib/rails';
 import type { ChunkInput } from '@/types';
 import { chunkText } from './chunk';
 import { discoverUrls, type Fetcher } from './discover';
@@ -112,10 +113,6 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
     return run;
   };
 
-  const markDone = async (url: string) => {
-    pending = pending.filter((u) => u !== url);
-    await recordCrawledPage(db, agentId, url, { pagesCrawled, chunkCount, pagesSkipped }, new Date(deps.now()));
-  };
 
   const storePage = (url: string, page: PageText | null, chunks: string[], vectors: number[][]) =>
     serialized(async () => {
@@ -128,21 +125,27 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
         content,
         embedding: vectors[i],
       }));
-      const inserted = await insertChunksWithinCeiling(db, agentId, batch, limits.maxTotalChunks);
+      const inserted = await insertChunksWithinCeiling(db, agentId, batch, limits.maxTotalChunks, {
+        url,
+        pagesCrawled: pagesCrawled + 1,
+        pagesSkipped,
+        now: new Date(deps.now()),
+      });
       chunkCount += inserted;
       pagesCrawled += 1;
+      pending = pending.filter((u) => u !== url);
       if (inserted < batch.length) ceilingReached = true;
       if (ceilingReached || chunkCount >= limits.maxChunksPerAgent) {
         full = true;
         stopped = true;
       }
-      await markDone(url);
     });
 
   const skipPage = (url: string) =>
     serialized(async () => {
       pagesSkipped += 1;
-      await markDone(url);
+      pending = pending.filter((u) => u !== url);
+      await recordCrawledPage(db, agentId, url, { pagesCrawled, chunkCount, pagesSkipped }, new Date(deps.now()));
     });
 
   const crawlPage = async (url: string): Promise<void> => {
@@ -159,6 +162,9 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
   try {
     const agent = await getAgentById(db, agentId);
     if (!agent) throw new Error('Agent not found');
+    // Vectors of another size cannot be stored: fail loudly instead of crawling for nothing.
+    const mismatch = agent.status === 'crawling' ? await embeddingSizeMismatch(db) : null;
+    if (mismatch) throw new Error(mismatch);
     const state = await beginCrawlSlice(db, agentId, new Date(start));
     if (!state) {
       // Finished (or reset) between the caller's check and this slice.
@@ -195,9 +201,21 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
         } catch (err) {
           // A page cut off by the end of the slice stays on the to-do list for the next one.
           if (embedSignal.aborted) continue;
-          // One bad page (a fetch error, an embedding 5xx/429) must not sink the pages already stored.
+          if (err instanceof EmbeddingRateLimitError) {
+            // Rate limited after every retry (or the daily embedding rail is spent): keep the
+            // page pending and end this slice; a later slice tries again.
+            console.warn(`[crawl] ${agentId} paused: ${err.message}`);
+            stopped = true;
+            continue;
+          }
+          // One bad page (a fetch error, an embedding 5xx) must not sink the pages already stored.
           console.error(`[crawl] ${agentId} skipped a page:`, err instanceof Error ? err.message : 'unknown error');
-          await skipPage(url);
+          try {
+            await skipPage(url);
+          } catch (recordErr) {
+            // The page stays pending; the next slice retries it.
+            console.error(`[crawl] ${agentId} could not record a skipped page:`, recordErr instanceof Error ? recordErr.message : recordErr);
+          }
         }
       }
     };
@@ -272,7 +290,8 @@ export function createCrawlDeps(): CrawlDeps {
         accept,
         userAgent: CRAWLER_USER_AGENT,
       }),
-    embed: embedTexts,
+    embed: (texts, inputType, options) =>
+      embedTexts(texts, inputType, { ...options, beforeRequest: embedRequestGate(db, limits) }),
     scrape: FIRECRAWL_CONFIG.IS_ENABLED ? scrapeUrl : null,
     firecrawlAllowed: async () =>
       (await checkRail(db, 'firecrawl_daily', { ip: 'global' }, new Date(), limits)).ok,

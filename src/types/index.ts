@@ -44,6 +44,8 @@ export interface AgentRow {
   createdAt: Date;
   lastUsedAt: Date;
   crawlStartedAt: Date | null;
+  /** When the crawl last made progress (a slice started or a page finished). */
+  crawlProgressAt: Date | null;
   lastError: string | null;
   pinned: boolean;
   ownerTokenHash: string | null;

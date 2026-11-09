@@ -5,7 +5,7 @@
 
 import { DEFAULT_INSTRUCTION, type Limits } from '@/lib/config';
 import { createCrawlDeps, runCrawl, type CrawlOutcome } from '@/lib/crawl/run-crawl';
-import { releaseCrawlLock, tryLockCrawl } from '@/lib/crawl/start-crawl';
+import { releaseCrawlLock, renewCrawlLock, tryLockCrawl } from '@/lib/crawl/start-crawl';
 import { domainKey, normalizeSubmittedUrl } from '@/lib/crawl/url-guard';
 import type { Db } from '@/lib/db/client';
 import {
@@ -17,6 +17,7 @@ import {
   resetForCrawl,
   type AgentWithIdInput,
 } from '@/lib/db/agents';
+import { REEMBED_REQUIRED_ERROR } from '@/lib/db/schema';
 import { ensureCapacity } from '@/lib/sweep';
 
 /** The fields of an exported agent that the import uses. */
@@ -98,7 +99,7 @@ export function mapLegacyAgent(agent: LegacyAgent, now: Date, limits: Limits): A
   };
 }
 
-/** `recrawled`: the row already existed, unowned and `failed` (e.g. after an embedding migration), and was crawled again. */
+/** `recrawled`: the row already existed, unowned and emptied by an embedding migration, and was crawled again. */
 export type ImportAction = 'inserted' | 'replaced' | 'recrawled' | 'exists' | 'skipped' | 'conflict';
 
 export interface ImportResult {
@@ -139,7 +140,9 @@ async function place(
   if (SKIP_DOMAINS.has(input.domain)) return { action: 'skipped', note: 'skipped: on the skip list', wrote: false };
   const existing = await getAgentById(db, input.id);
   if (existing) {
-    if (existing.status !== 'failed' || existing.ownerTokenHash) return { action: 'exists', wrote: false };
+    // Only rows an embedding migration emptied are re-crawled; other failures stay as they are.
+    const needsReembed = existing.status === 'failed' && existing.lastError === REEMBED_REQUIRED_ERROR;
+    if (!needsReembed || existing.ownerTokenHash) return { action: 'exists', wrote: false };
     if (dryRun) return { action: 'recrawled', wrote: false };
     const refusal = await guard();
     if (refusal) return { action: 'conflict', wrote: false, stopped: refusal };
@@ -172,7 +175,11 @@ async function crawlLocked(
     if (reset) await resetForCrawl(db, id, new Date());
     const deps = createCrawlDeps();
     let outcome = await runCrawl(id, deps);
-    while (outcome.status === 'crawling') outcome = await runCrawl(id, deps);
+    while (outcome.status === 'crawling') {
+      // Each slice gets a fresh lock lifetime, so a long import never loses the lock mid-crawl.
+      await renewCrawlLock(db, id, new Date(), opts.limits);
+      outcome = await runCrawl(id, deps);
+    }
     return { crawl: outcome };
   } catch (err) {
     return { crawl: null, crawlError: err instanceof Error ? err.message : String(err) };
