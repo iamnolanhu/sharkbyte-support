@@ -78,10 +78,9 @@ describe('continueCrawl', () => {
   });
 
   it('starts nothing and touches nothing while the daily embedding rail is spent', async () => {
-    const small = { ...limits, maxEmbedRequestsPerDay: 2 };
-    const gate = embedRequestGate(db, small);
-    await gate();
-    await gate();
+    const small = { ...limits, maxEmbedRequestsPerDay: 4 };
+    const gate = embedRequestGate(db, small, 'crawl');
+    for (let i = 0; i < 3; i++) await gate();
     const before = await getAgentById(db, agent.id);
 
     expect(await continueCrawl(db, agent, new Date(), small)).toBe(false);

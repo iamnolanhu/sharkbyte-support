@@ -24,7 +24,7 @@ import { embeddingSizeMismatch, getDb, type Db } from '@/lib/db/client';
 import { EmbeddingRateLimitError } from '@/lib/embedding-errors';
 import { embedTexts, type EmbedFn } from '@/lib/embeddings';
 import { scrapeUrl, type ScrapeResult } from '@/lib/firecrawl';
-import { RAIL_COPY, checkRail, embedRequestGate } from '@/lib/rails';
+import { RAIL_COPY, checkRail, embedRailSpent, embedRequestGate } from '@/lib/rails';
 import type { ChunkInput } from '@/types';
 import { chunkText } from './chunk';
 import { discoverUrls, type Fetcher } from './discover';
@@ -45,6 +45,10 @@ export interface CrawlDeps {
 export interface CrawlOutcome {
   /** `crawling`: this slice ran out of time with pages left; another slice continues it. */
   status: 'ready' | 'failed' | 'crawling';
+  /** Pages this slice stored or gave up on (0: rate limited, or the embedding share is spent). */
+  pagesThisSlice: number;
+  /** True when this slice stopped because of rate limits or the spent daily embedding share. */
+  paused: boolean;
   pagesCrawled: number;
   pagesTotal: number;
   chunkCount: number;
@@ -110,6 +114,8 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
   /** Pages this slice stored or gave up on. */
   let pagesThisSlice = 0;
   let sliceState: Awaited<ReturnType<typeof beginCrawlSlice>> = null;
+  /** The visitor-facing error for a crawl-level failure (defaults to CRAWL_ERROR_COPY). */
+  let failureCopy: string | null = null;
 
   // Inserts and progress updates run one at a time, so `pos` and the per-agent cap stay exact.
   let writeQueue: Promise<void> = Promise.resolve();
@@ -172,7 +178,22 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
     if (!agent) throw new Error('Agent not found');
     // Vectors of another size cannot be stored: fail loudly instead of crawling for nothing.
     const mismatch = agent.status === 'crawling' ? await embeddingSizeMismatch(db) : null;
-    if (mismatch) throw new Error(mismatch);
+    if (mismatch) {
+      failureCopy = `Sammy can't store pages right now: ${mismatch}.`;
+      throw new Error(mismatch);
+    }
+    // No embeddings left for crawls today: fetch nothing, change nothing.
+    if (agent.status === 'crawling' && (await embedRailSpent(db, new Date(start), limits, 'crawl'))) {
+      return {
+        status: 'crawling',
+        pagesCrawled: agent.pagesCrawled,
+        pagesTotal: agent.pagesTotal,
+        chunkCount: agent.chunkCount,
+        seconds: 0,
+        pagesThisSlice: 0,
+        paused: true,
+      };
+    }
     const state = await beginCrawlSlice(db, agentId, new Date(start));
     sliceState = state;
     if (!state) {
@@ -183,6 +204,8 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
         pagesTotal: agent.pagesTotal,
         chunkCount: agent.chunkCount,
         seconds: 0,
+        pagesThisSlice: 0,
+        paused: false,
       };
     }
     ({ pagesCrawled, pagesTotal, chunkCount, pagesSkipped } = state);
@@ -249,14 +272,14 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
         console.error(`[crawl] ${agentId} could not take back an empty slice:`, err instanceof Error ? err.message : err);
       }
     }
-    return { status: 'crawling', pagesCrawled, pagesTotal, chunkCount, seconds };
+    return { status: 'crawling', pagesCrawled, pagesTotal, chunkCount, seconds, pagesThisSlice, paused };
   }
 
   let status: 'ready' | 'failed';
   let lastError: string | null = null;
   if (failure !== null) {
     status = 'failed';
-    lastError = CRAWL_ERROR_COPY;
+    lastError = failureCopy ?? CRAWL_ERROR_COPY;
     console.error(`[crawl] ${agentId} failed:`, failure instanceof Error ? failure.message : 'unknown error');
   } else if (chunkCount > 0) {
     status = 'ready';
@@ -293,7 +316,7 @@ export async function runCrawl(agentId: string, deps: CrawlDeps): Promise<CrawlO
     // Analytics must never break a crawl.
   }
 
-  return { status, pagesCrawled, pagesTotal, chunkCount, seconds };
+  return { status, pagesCrawled, pagesTotal, chunkCount, seconds, pagesThisSlice, paused };
 }
 
 /** Production wiring: guarded fetches, the configured embeddings provider, Firecrawl when configured and under its daily rail. */
@@ -310,7 +333,7 @@ export function createCrawlDeps(): CrawlDeps {
         userAgent: CRAWLER_USER_AGENT,
       }),
     embed: (texts, inputType, options) =>
-      embedTexts(texts, inputType, { ...options, beforeRequest: embedRequestGate(db, limits) }),
+      embedTexts(texts, inputType, { ...options, beforeRequest: embedRequestGate(db, limits, 'crawl') }),
     scrape: FIRECRAWL_CONFIG.IS_ENABLED ? scrapeUrl : null,
     firecrawlAllowed: async () =>
       (await checkRail(db, 'firecrawl_daily', { ip: 'global' }, new Date(), limits)).ok,

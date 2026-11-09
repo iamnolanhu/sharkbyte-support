@@ -3,7 +3,7 @@ import { getLimits } from '@/lib/config';
 import { setDbForTests, type Db } from '@/lib/db/client';
 import { finishCrawl, getAgentById, insertAgent } from '@/lib/db/agents';
 import { countAllChunks, insertChunksWithinCeiling } from '@/lib/db/chunks';
-import { readQuota } from '@/lib/db/quota';
+import { incrementQuota, readQuota } from '@/lib/db/quota';
 import { runInBackground } from '@/lib/background';
 import { runCrawl } from '@/lib/crawl/run-crawl';
 import { tryLockCrawl } from '@/lib/crawl/start-crawl';
@@ -90,6 +90,12 @@ function repair(agentId: string, token?: string, ip = IP): Promise<Response> {
 
 const createsThisHour = (): Promise<number> => readQuota(db, railKey('create_ip', IP, NOW), NOW);
 const crawlsToday = (): Promise<number> => readQuota(db, railKey('crawl_daily', 'global', NOW), NOW);
+
+/** Uses up the crawls' share (75 % of the default 900) of today's embedding requests. */
+async function spendCrawlEmbedShare(): Promise<void> {
+  await incrementQuota(db, railKey('embed_daily', 'global', NOW), 675, new Date(NOW.getTime() + 24 * 60 * 60 * 1000), NOW);
+}
+
 const lockIsFree = (agentId: string): Promise<boolean> => tryLockCrawl(db, agentId, NOW, getLimits());
 
 describe('POST /api/agents/[agentId]/repair', () => {
@@ -180,6 +186,31 @@ describe('POST /api/agents/[agentId]/repair', () => {
     });
     expect(background).not.toHaveBeenCalled();
     expect(await crawlsToday()).toBe(0);
+  });
+
+  it('repair is refused once crawls spent their embedding share, keeping the pages', async () => {
+    await spendCrawlEmbedShare();
+    const { agent, token } = await readyAgent();
+    const res = await repair(agent.id, token);
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { error: string }).error).toBe('Sammy has read all it can for today — the free demo resets tomorrow.');
+    expect(await countAllChunks(db)).toBe(2);
+    expect(background).not.toHaveBeenCalled();
+    expect(await createsThisHour()).toBe(0);
+    expect(await lockIsFree(agent.id)).toBe(true);
+  });
+
+  it('during a size mismatch without the opt-in, repair fails before deleting any page', async () => {
+    const { agent, token } = await readyAgent();
+    vi.stubEnv('EMBEDDING_DIMS', '1536');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const res = await repair(agent.id, token);
+    errorSpy.mockRestore();
+    expect(res.status).toBe(503);
+    expect(await countAllChunks(db)).toBe(2);
+    expect((await getAgentById(db, agent.id))?.status).toBe('ready');
+    expect(background).not.toHaveBeenCalled();
+    expect(await lockIsFree(agent.id)).toBe(true);
   });
 
   it('an agent the capacity sweep evicts is 404 and leaves no lock', async () => {

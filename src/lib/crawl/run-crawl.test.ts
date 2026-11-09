@@ -10,6 +10,8 @@ import type { EmbedFn } from '@/lib/embeddings';
 import type { Fetcher } from './discover';
 import { MAX_CRAWL_SLICES, runCrawl, type CrawlDeps } from './run-crawl';
 import { EmbeddingQuotaError, EmbeddingRateLimitError } from '@/lib/embedding-errors';
+import { incrementQuota } from '@/lib/db/quota';
+import { railKey } from '@/lib/rails';
 
 const NOW = new Date('2026-11-05T10:00:00.000Z');
 const CAPACITY_COPY = 'The free demo is full right now — try again tomorrow';
@@ -358,6 +360,20 @@ describe('runCrawl', () => {
       expect(outcome).toMatchObject({ status: 'ready', pagesCrawled: 5 });
     });
 
+    it('fetches nothing and changes nothing once crawls spent their embedding share', async () => {
+      const id = await newAgent('spent.example');
+      // The crawl reads the rail on its own clock (NOW in these tests).
+      await incrementQuota(db, railKey('embed_daily', 'global', NOW), 675, new Date(NOW.getTime() + 86_400_000), NOW);
+      const fetcher = vi.fn<Fetcher>(siteFetcher('spent.example', { '/': 1 }));
+      const before = await getAgentById(db, id);
+
+      const outcome = await runCrawl(id, makeDeps({ fetcher }));
+
+      expect(outcome).toMatchObject({ status: 'crawling', pagesThisSlice: 0, paused: true });
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(await getAgentById(db, id)).toEqual(before);
+    });
+
     it('stores each page and takes it off the to-do list together', async () => {
       const id = await newAgent('atomic.example');
       await runCrawl(id, makeDeps({ fetcher: siteFetcher('atomic.example', { '/': 2, '/a': 3 }) }));
@@ -545,6 +561,8 @@ describe('runCrawl', () => {
     logged.mockRestore();
     vi.unstubAllEnvs();
     expect(outcome.status).toBe('failed');
+    // Both sizes reach the agent's visible error too, not only the log.
+    expect((await getAgentById(db, id))?.lastError).toMatch(/halfvec\(768\).*EMBEDDING_DIMS is 1536/);
     expect(embed).not.toHaveBeenCalled();
   });
 

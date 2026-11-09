@@ -10,7 +10,7 @@ import {
   startCrawlOrRelease,
   tryLockCrawl,
 } from '@/lib/crawl/start-crawl';
-import { checkRail, getClientIp } from '@/lib/rails';
+import { checkRail, crawlEmbedRefusal, getClientIp } from '@/lib/rails';
 import { ensureCapacity } from '@/lib/sweep';
 import { mintOwnerToken } from '@/lib/owner-token';
 import { apiError, COPY, rateLimited, readJsonObject } from '@/lib/agent-api';
@@ -77,6 +77,9 @@ export async function POST(request: Request) {
     return agentResponse(result === 'started' ? { ...existing, status: 'crawling' } : existing);
   }
 
+  // Crawls spent their share of today's embeddings: refuse before charging any rail.
+  const embedShare = await crawlEmbedRefusal(db, now, limits);
+  if (embedShare) return rateLimited(embedShare);
   const createRail = await checkRail(db, 'create_ip', { ip }, now, limits);
   if (!createRail.ok) return rateLimited(createRail);
 

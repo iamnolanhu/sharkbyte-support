@@ -1,5 +1,5 @@
 import type { Db } from '@/lib/db/client';
-import { incrementQuota, readQuota } from '@/lib/db/quota';
+import { incrementQuota, incrementQuotaBelow, readQuota } from '@/lib/db/quota';
 import type { Limits } from '@/lib/config';
 import { EmbeddingQuotaError } from '@/lib/embedding-errors';
 
@@ -100,20 +100,45 @@ export async function checkRail(
   return count > limitFor(rail, limits) ? blocked(rail) : { ok: true };
 }
 
+/** Who spends embedding requests: crawls may use 75 % of the daily rail, chat questions all of it. */
+export type EmbedPurpose = 'crawl' | 'chat';
+
+/** Share of MAX_EMBED_REQUESTS_PER_DAY crawls may use; the rest is kept for chat questions. */
+export const CRAWL_EMBED_SHARE = 0.75;
+
+function embedLimit(limits: Limits, purpose: EmbedPurpose): number {
+  return purpose === 'crawl'
+    ? Math.floor(limits.maxEmbedRequestsPerDay * CRAWL_EMBED_SHARE)
+    : limits.maxEmbedRequestsPerDay;
+}
+
 /**
  * The `beforeRequest` gate for embeddings: counts one provider request against the daily
- * embedding rail and throws EmbeddingQuotaError once it is spent.
+ * embedding rail (up to the purpose's share) and throws EmbeddingQuotaError once it is spent.
+ * A refused request is not counted, so refused crawls never eat into chat's reserve.
  */
-export function embedRequestGate(db: Db, limits: Limits): () => Promise<void> {
+export function embedRequestGate(db: Db, limits: Limits, purpose: EmbedPurpose): () => Promise<void> {
   return async () => {
-    const result = await checkRail(db, 'embed_daily', { ip: 'global' }, new Date(), limits);
-    if (!result.ok) throw new EmbeddingQuotaError(result.message);
+    const now = new Date();
+    const counted = await incrementQuotaBelow(
+      db,
+      railKey('embed_daily', 'global', now),
+      embedLimit(limits, purpose),
+      expiry('embed_daily', now),
+      now,
+    );
+    if (!counted) throw new EmbeddingQuotaError(RAIL_COPY.embed_daily);
   };
 }
 
-/** Read-only: true once the day's embedding requests are spent (nothing is counted). */
-export async function embedRailSpent(db: Db, now: Date, limits: Limits): Promise<boolean> {
-  return (await readQuota(db, railKey('embed_daily', 'global', now), now)) >= limits.maxEmbedRequestsPerDay;
+/** Read-only: true once the purpose's share of the day's embedding requests is spent. */
+export async function embedRailSpent(db: Db, now: Date, limits: Limits, purpose: EmbedPurpose = 'crawl'): Promise<boolean> {
+  return (await readQuota(db, railKey('embed_daily', 'global', now), now)) >= embedLimit(limits, purpose);
+}
+
+/** The 429 rail for a crawl that must not start because crawls spent their embedding share. */
+export async function crawlEmbedRefusal(db: Db, now: Date, limits: Limits): Promise<RailBlocked | null> {
+  return (await embedRailSpent(db, now, limits, 'crawl')) ? blocked('embed_daily') : null;
 }
 
 /** Read-only: blocks once the day's chat token budget is spent. */

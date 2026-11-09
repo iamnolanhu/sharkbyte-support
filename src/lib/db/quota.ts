@@ -20,6 +20,24 @@ export async function incrementQuota(
 }
 
 /** Current counter value, 0 when missing or expired. */
+/**
+ * Counts one use only while the count is below `limit` (a refused use is not counted).
+ * True when the use was counted.
+ */
+export async function incrementQuotaBelow(db: Db, key: string, limit: number, expiresAt: Date, now: Date): Promise<boolean> {
+  if (limit <= 0) return false;
+  const rows = await db.query<{ count: string }>(
+    `INSERT INTO quota (key, count, expires_at) VALUES ($1, 1, $2)
+     ON CONFLICT (key) DO UPDATE SET
+       count = CASE WHEN quota.expires_at <= $3 THEN 1 ELSE quota.count + 1 END,
+       expires_at = CASE WHEN quota.expires_at <= $3 THEN EXCLUDED.expires_at ELSE quota.expires_at END
+       WHERE quota.expires_at <= $3 OR quota.count < $4
+     RETURNING count`,
+    [key, expiresAt.toISOString(), now.toISOString(), limit],
+  );
+  return rows.length > 0;
+}
+
 export async function readQuota(db: Db, key: string, now: Date): Promise<number> {
   const rows = await db.query<{ count: string }>(
     'SELECT count FROM quota WHERE key = $1 AND expires_at > $2',

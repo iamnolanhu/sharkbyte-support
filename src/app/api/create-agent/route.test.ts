@@ -3,7 +3,7 @@ import { getLimits } from '@/lib/config';
 import { setDbForTests, type Db } from '@/lib/db/client';
 import { finishCrawl, getAgentByDomain, getAgentById, insertAgent } from '@/lib/db/agents';
 import { insertChunksWithinCeiling } from '@/lib/db/chunks';
-import { acquireLock, readQuota, releaseLock } from '@/lib/db/quota';
+import { acquireLock, incrementQuota, readQuota, releaseLock } from '@/lib/db/quota';
 import { runInBackground } from '@/lib/background';
 import { runCrawl } from '@/lib/crawl/run-crawl';
 import { tryLockCrawl } from '@/lib/crawl/start-crawl';
@@ -79,6 +79,12 @@ interface Body {
 async function create(url: string, ip = IP): Promise<{ status: number; body: Body }> {
   const res = await post({ url }, ip);
   return { status: res.status, body: (await res.json()) as Body };
+}
+
+
+/** Uses up the crawls' share (75 % of the default 900) of today's embedding requests. */
+async function spendCrawlEmbedShare(): Promise<void> {
+  await incrementQuota(db, railKey('embed_daily', 'global', NOW), 675, new Date(NOW.getTime() + 24 * 60 * 60 * 1000), NOW);
 }
 
 const crawlsToday = (): Promise<number> => readQuota(db, railKey('crawl_daily', 'global', NOW), NOW);
@@ -191,6 +197,16 @@ describe('POST /api/create-agent', () => {
     expect(captureServer).toHaveBeenCalledWith('rate_limited', { rail: 'crawl_daily' });
     expect(await getAgentByDomain(db, 'two.example')).toBeNull();
     expect(background).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a new crawl once crawls spent their embedding share, charging nothing', async () => {
+    await spendCrawlEmbedShare();
+    const { status, body } = await create('https://fresh.example');
+    expect(status).toBe(429);
+    expect(body).toMatchObject({ error: 'Sammy has read all it can for today — the free demo resets tomorrow.', rail: 'embed_daily' });
+    expect(background).not.toHaveBeenCalled();
+    expect(await createsThisHour()).toBe(0);
+    expect(await crawlsToday()).toBe(0);
   });
 
   it('full demo returns the spec copy', async () => {

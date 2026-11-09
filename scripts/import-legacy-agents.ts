@@ -51,7 +51,7 @@ async function main(): Promise<void> {
     crawl,
     dryRun,
     onResult: (r) => {
-      const crawled = r.action === 'inserted' || r.action === 'replaced' || r.action === 'recrawled';
+      const crawled = ['inserted', 'replaced', 'recrawled', 'resumed'].includes(r.action);
       const crawlPart = crawled ? ` | ${describeCrawl(r)}` : '';
       console.log(`${r.domain} | ${r.id} | ${r.note ?? r.action}${crawlPart}`);
     },
@@ -61,6 +61,7 @@ async function main(): Promise<void> {
     inserted: 0,
     replaced: 0,
     recrawled: 0,
+    resumed: 0,
     exists: 0,
     skipped: 0,
     conflict: 0,
@@ -68,7 +69,7 @@ async function main(): Promise<void> {
   for (const r of results) totals[r.action]++;
   const crawled = results.filter((r) => r.crawl);
   console.log(
-    `Totals: inserted ${totals.inserted}, replaced ${totals.replaced}, recrawled ${totals.recrawled},` +
+    `Totals: inserted ${totals.inserted}, replaced ${totals.replaced}, recrawled ${totals.recrawled}, resumed ${totals.resumed},` +
       ` exists ${totals.exists}, skipped ${totals.skipped}, conflict ${totals.conflict}` +
       ` | crawled ${crawled.length} (ready ${crawled.filter((r) => r.crawl?.status === 'ready').length},` +
       ` failed ${crawled.filter((r) => r.crawl?.status === 'failed').length}),` +

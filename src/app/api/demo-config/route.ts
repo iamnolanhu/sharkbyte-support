@@ -6,6 +6,7 @@ import { domainKey } from '@/lib/crawl/url-guard';
 import { continueCrawl, releaseCrawlLock, startCrawlOrRelease, tryLockCrawl } from '@/lib/crawl/start-crawl';
 import { ensureCapacity } from '@/lib/sweep';
 import { rateLimited } from '@/lib/agent-api';
+import { crawlEmbedRefusal } from '@/lib/rails';
 import type { AgentRow, DemoConfigResponse } from '@/types';
 
 /** The crawl runs in `after()` of this invocation; must equal getLimits().crawlMaxDurationS (Next reads it statically). */
@@ -31,8 +32,10 @@ async function demoRecrawlAllowed(db: Db, now: Date): Promise<boolean> {
   return (await incrementQuota(db, key, 1, new Date(hourStart + HOUR_MS), now)) <= 1;
 }
 
-/** The capacity 429 when a full-size crawl no longer fits, else null. */
+/** The 429 when crawls spent their embedding share or a full-size crawl no longer fits, else null. */
 async function capacityRefusal(db: Db, now: Date, limits: Limits): Promise<Response | null> {
+  const embedShare = await crawlEmbedRefusal(db, now, limits);
+  if (embedShare) return rateLimited(embedShare);
   const capacity = await ensureCapacity(db, now, limits);
   return capacity.ok ? null : rateLimited(capacity);
 }

@@ -6,8 +6,11 @@ import {
   addChatTokens,
   checkChatTokenBudget,
   checkRail,
+  crawlEmbedRefusal,
+  embedRailSpent,
   embedRequestGate,
   getClientIp,
+  railKey,
   railResponse,
   type RailBlocked,
 } from '@/lib/rails';
@@ -74,13 +77,21 @@ describe('rails', () => {
     });
   });
 
-  it('the embedding gate counts each request and refuses past MAX_EMBED_REQUESTS_PER_DAY', async () => {
-    const small = getLimits({ MAX_EMBED_REQUESTS_PER_DAY: '2' });
-    const gate = embedRequestGate(db, small);
-    await gate();
-    await gate();
-    await expect(gate()).rejects.toBeInstanceOf(EmbeddingQuotaError);
-    await expect(gate()).rejects.toThrow('Sammy has read all it can for today');
+  it('the embedding gate keeps a quarter of MAX_EMBED_REQUESTS_PER_DAY for chat questions', async () => {
+    const small = getLimits({ MAX_EMBED_REQUESTS_PER_DAY: '4' });
+    const now = new Date();
+    const crawlGate = embedRequestGate(db, small, 'crawl');
+    const chatGate = embedRequestGate(db, small, 'chat');
+    for (let i = 0; i < 3; i++) await crawlGate();
+    expect(await embedRailSpent(db, now, small, 'crawl')).toBe(true);
+    expect(await embedRailSpent(db, now, small, 'chat')).toBe(false);
+    expect(await crawlEmbedRefusal(db, now, small)).toMatchObject({ ok: false, rail: 'embed_daily' });
+    // Refused crawl requests are not counted, so chat keeps its reserve.
+    await expect(crawlGate()).rejects.toBeInstanceOf(EmbeddingQuotaError);
+    await expect(crawlGate()).rejects.toThrow('Sammy has read all it can for today');
+    await chatGate();
+    await expect(chatGate()).rejects.toBeInstanceOf(EmbeddingQuotaError);
+    expect(await readQuota(db, railKey('embed_daily', 'global', now), now)).toBe(4);
   });
 
   it('chat token budget blocks once spent', async () => {

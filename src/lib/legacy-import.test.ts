@@ -13,7 +13,11 @@ import {
   type ImportOptions,
   type ImportResult,
   type LegacyAgent,
+  EMBED_LIMIT_PAUSE,
+  NO_PROGRESS_PAUSE,
 } from './legacy-import';
+import { incrementQuota } from '@/lib/db/quota';
+import { railKey } from '@/lib/rails';
 
 /** The per-agent results of an import (the summary's `stopped` is asserted separately). */
 async function importLegacyAgents(db: Db, agents: readonly LegacyAgent[], opts: ImportOptions): Promise<ImportResult[]> {
@@ -40,7 +44,15 @@ function legacy(over: Partial<LegacyAgent> & { uuid: string; domain: string }): 
   };
 }
 
-const outcome: CrawlOutcome = { status: 'ready', pagesCrawled: 3, pagesTotal: 3, chunkCount: 9, seconds: 1 };
+const outcome: CrawlOutcome = {
+  status: 'ready',
+  pagesCrawled: 3,
+  pagesTotal: 3,
+  chunkCount: 9,
+  seconds: 1,
+  pagesThisSlice: 3,
+  paused: false,
+};
 
 let db: Db;
 beforeEach(async () => {
@@ -168,10 +180,79 @@ describe('importLegacyAgents', () => {
   it('is idempotent: importing twice inserts once', async () => {
     const agents = [legacy({ uuid: ID_A, domain: 'shells.example' })];
     await importLegacyAgents(db, agents, opts);
+    await finishCrawl(db, ID_A, { status: 'ready', lastError: null });
     const second = await importLegacyAgents(db, agents, { ...opts, crawl: true });
     expect(second[0].action).toBe('exists');
     expect(crawl).not.toHaveBeenCalled();
     expect(await db.query('SELECT id FROM agents')).toHaveLength(1);
+  });
+
+  it('resumes an unowned row left crawling, without resetting it', async () => {
+    const agents = [legacy({ uuid: ID_A, domain: 'shells.example' })];
+    await importLegacyAgents(db, agents, opts);
+    await insertChunksWithinCeiling(
+      db,
+      ID_A,
+      [{ url: 'https://shells.example', title: 't', pos: 0, content: 'kept', embedding: fakeEmbedding(1) }],
+      limits.maxTotalChunks,
+    );
+    const [r] = await importLegacyAgents(db, agents, { ...opts, crawl: true });
+    expect(r).toMatchObject({ action: 'resumed', crawl: outcome });
+    expect(await countAllChunks(db)).toBe(1);
+  });
+
+  it('stops the whole run, crawling nothing, once crawls spent their embedding share', async () => {
+    const now = new Date();
+    await incrementQuota(db, railKey('embed_daily', 'global', now), 675, new Date(now.getTime() + 86_400_000), now);
+    const summary = await importWithSummary(
+      db,
+      [legacy({ uuid: ID_A, domain: 'a.example' }), legacy({ uuid: ID_B, domain: 'b.example' })],
+      { ...opts, crawl: true },
+    );
+    expect(summary.stopped).toBe(EMBED_LIMIT_PAUSE);
+    expect(summary.results).toHaveLength(1);
+    expect(summary.results[0]).toMatchObject({ domain: 'a.example', crawlError: EMBED_LIMIT_PAUSE });
+    expect(crawl).not.toHaveBeenCalled();
+    // The row waits as `crawling` for the re-run after midnight UTC.
+    expect((await getAgentById(db, ID_A))?.status).toBe('crawling');
+  });
+
+  it('stops the run when the share runs out mid-crawl, and pauses a crawl whose slice added no pages', async () => {
+    const now = new Date();
+    crawl.mockImplementationOnce(async () => {
+      await incrementQuota(db, railKey('embed_daily', 'global', now), 675, new Date(now.getTime() + 86_400_000), now);
+      return { ...outcome, status: 'crawling', pagesThisSlice: 2 };
+    });
+    const summary = await importWithSummary(
+      db,
+      [legacy({ uuid: ID_A, domain: 'a.example' }), legacy({ uuid: ID_B, domain: 'b.example' })],
+      { ...opts, crawl: true },
+    );
+    expect(summary.stopped).toBe(EMBED_LIMIT_PAUSE);
+    expect(crawl).toHaveBeenCalledTimes(1);
+
+    crawl.mockReset();
+    await db.query('DELETE FROM quota');
+    crawl.mockResolvedValue({ ...outcome, status: 'crawling', pagesThisSlice: 0, paused: true });
+    const [r] = await importLegacyAgents(db, [legacy({ uuid: ID_C, domain: 'c.example' })], { ...opts, crawl: true });
+    expect(r.crawlError).toBe(NO_PROGRESS_PAUSE);
+    // No loop: one slice, then the pause.
+    expect(crawl).toHaveBeenCalledTimes(1);
+  });
+
+  it('locks each agent at the current time, not the run\'s start time', async () => {
+    const stale = new Date(Date.now() - 60 * 60 * 1000);
+    crawl.mockImplementationOnce(async (id) => {
+      // Held right now, though the run started an hour ago (past the lock lifetime).
+      expect(await tryLockCrawl(db, id, new Date(), limits)).toBe(false);
+      return outcome;
+    });
+    const [r] = await importLegacyAgents(db, [legacy({ uuid: ID_A, domain: 'a.example' })], {
+      ...opts,
+      now: stale,
+      crawl: true,
+    });
+    expect(r.crawl).toEqual(outcome);
   });
 
   it('replaces an unowned row on the same domain, keeping nothing of it', async () => {

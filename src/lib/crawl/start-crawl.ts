@@ -2,7 +2,8 @@ import { apiError, COPY, rateLimited } from '@/lib/agent-api';
 import { APP_DOMAIN, type Limits } from '@/lib/config';
 import type { Db } from '@/lib/db/client';
 import { getAgentById, resetForCrawl } from '@/lib/db/agents';
-import { checkRail, embedRailSpent } from '@/lib/rails';
+import { checkRail, crawlEmbedRefusal, embedRailSpent } from '@/lib/rails';
+import { embeddingSizeMismatch } from '@/lib/db/client';
 import { ensureCapacity } from '@/lib/sweep';
 import { acquireLock, releaseLock, renewLock } from '@/lib/db/quota';
 import { runInBackground } from '@/lib/background';
@@ -43,7 +44,7 @@ export async function continueCrawl(db: Db, agent: AgentRow, now: Date, limits: 
   if (agent.crawlProgressAt && now.getTime() - agent.crawlProgressAt.getTime() < RECENT_PROGRESS_MS) return false;
   // No embeddings left today: start nothing and touch nothing; the sweep's no-progress rule
   // is the only thing that can end the crawl meanwhile.
-  if (await embedRailSpent(db, now, limits)) return false;
+  if (await embedRailSpent(db, now, limits, 'crawl')) return false;
   if (!(await tryLockCrawl(db, agent.id, now, limits))) return false;
   await runSliceInBackground(db, agent.id);
   return true;
@@ -115,6 +116,14 @@ export async function recrawlWithRails(
 
 /** The response that stops a re-crawl (a rail, or the agent is gone), or null to go ahead. */
 async function railRefusal(db: Db, agentId: string, ip: string, now: Date, limits: Limits): Promise<Response | null> {
+  // Checked before the reset, which would delete the stored pages of a crawl bound to fail.
+  const mismatch = await embeddingSizeMismatch(db);
+  if (mismatch) {
+    console.error(`Re-crawl refused: ${mismatch}`);
+    return apiError(503, COPY.crawlStartFailed);
+  }
+  const embedShare = await crawlEmbedRefusal(db, now, limits);
+  if (embedShare) return rateLimited(embedShare);
   const createRail = await checkRail(db, 'create_ip', { ip }, now, limits);
   if (!createRail.ok) return rateLimited(createRail);
   const capacity = await ensureCapacity(db, now, limits);

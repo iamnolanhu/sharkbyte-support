@@ -48,7 +48,7 @@ PostHog project key is the only public one.
 | `NVIDIA_LLM_MODEL` | no | `nvidia/nemotron-3.5-lightning-30b-a3b` | NVIDIA chat model id |
 | `EMBEDDING_PROVIDER` | no | `gemini` | `gemini` or `nvidia` |
 | `EMBEDDING_MODEL` | no | `gemini-embedding-001` (nvidia: `nvidia/nemotron-3.5-embed-1b`) | Embedding model; changing it means re-crawling every agent |
-| `EMBEDDING_DIMS` | no | `768` (nvidia: `1024`) | Vector size stored in `chunks.embedding` (up to 4000); a change re-embeds everything, see below |
+| `EMBEDDING_DIMS` | no | `768` (nvidia: `1024`) | Vector size stored in `chunks.embedding` (Gemini up to 3072, NVIDIA up to 4000); a change re-embeds everything, see below |
 | `EMBEDDING_BATCH_SIZE` | no | `100` (nvidia: `1`) | Inputs per embeddings request (Gemini up to 100, NVIDIA up to 32) |
 | `EMBEDDING_DIMS_MIGRATE` | no | unset | `1` for ONE deploy after changing the embedding size: empties stored vectors and resizes them (see below); remove it afterwards |
 | `FIRECRAWL_API_KEY` | no | | Firecrawl for JavaScript-rendered pages |
@@ -60,7 +60,7 @@ PostHog project key is the only public one.
 | `MAX_CRAWLS_PER_DAY` | no | `20` | New crawls per UTC day, app-wide |
 | `MAX_CHAT_TOKENS_PER_DAY` | no | `500000` | Chat tokens per UTC day, app-wide |
 | `MAX_FIRECRAWL_PER_DAY` | no | `50` | Firecrawl scrapes per UTC day, app-wide |
-| `MAX_EMBED_REQUESTS_PER_DAY` | no | `900` | Embedding provider requests per UTC day, app-wide (Gemini free tier: about 1,000) |
+| `MAX_EMBED_REQUESTS_PER_DAY` | no | `900` | Embedding provider requests per UTC day, app-wide (Gemini free tier: about 1,000); crawls may use 75 %, the rest is kept for chat questions |
 | `POSTHOG_API_KEY` | no | | Server-side PostHog events |
 | `POSTHOG_HOST` | no | posthog-node default | Server-side PostHog host |
 | `NEXT_PUBLIC_POSTHOG_KEY` | no | | Browser PostHog: pageviews, autocapture and session replay on the site and inside the embed widget |
@@ -102,7 +102,9 @@ failed-agent rule (the 14-day idle rule still applies). Runbook:
    one request (any page) so the migration runs.
 3. Required: re-crawl the unowned imported agents with
    `bun --env-file=<file> scripts/import-legacy-agents.ts <export.json>`; it re-crawls exactly
-   the rows marked "re-embedding required". Owners re-crawl their own with **Repair**, and
+   the rows marked "re-embedding required". When crawls spend their share of the day's
+   embedding requests the run stops with "paused: daily embedding limit spent, re-run after
+   00:00 UTC"; run it again after midnight UTC and it resumes the rows left `crawling`. Owners re-crawl their own with **Repair**, and
    anyone can by submitting the URL again.
 4. Remove `EMBEDDING_DIMS_MIGRATE` from the environment.
 
@@ -145,7 +147,7 @@ ocean-themed message and nothing is spent.
 | Chat messages per IP | 20 per minute | fixed | "Easy there, fast fins! Give Sammy a minute to catch up." |
 | Chat tokens per day | 500,000 per UTC day | `MAX_CHAT_TOKENS_PER_DAY` | "The free demo is resting until tomorrow" |
 | Firecrawl per day | 50 per UTC day | `MAX_FIRECRAWL_PER_DAY` | nothing: pages are read without Firecrawl |
-| Embedding requests per day | 900 per UTC day | `MAX_EMBED_REQUESTS_PER_DAY` | chat: "Sammy has read all it can for today — the free demo resets tomorrow."; crawls pause and keep their pages pending |
+| Embedding requests per day | 900 per UTC day (crawls 75 %, chat the rest) | `MAX_EMBED_REQUESTS_PER_DAY` | "Sammy has read all it can for today — the free demo resets tomorrow." on chat, and on Create/Repair once the crawl share is spent; running crawls pause and keep their pages pending |
 
 Fixed bounds: a user message is at most 2,000 characters, the model sees the last 10 turns and
 answers in at most 600 tokens, and retrieval uses the top 6 chunks of that agent only.

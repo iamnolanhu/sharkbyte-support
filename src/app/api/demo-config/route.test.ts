@@ -3,6 +3,8 @@ import { APP_DOMAIN, getLimits } from '@/lib/config';
 import { setDbForTests, type Db } from '@/lib/db/client';
 import { finishCrawl, getAgentByDomain, getAgentById, insertAgent } from '@/lib/db/agents';
 import { insertChunksWithinCeiling } from '@/lib/db/chunks';
+import { incrementQuota } from '@/lib/db/quota';
+import { railKey } from '@/lib/rails';
 import { runInBackground } from '@/lib/background';
 import { runCrawl } from '@/lib/crawl/run-crawl';
 import { tryLockCrawl } from '@/lib/crawl/start-crawl';
@@ -47,6 +49,12 @@ interface DemoBody {
   status?: string;
   error?: string;
   rail?: string;
+}
+
+
+/** Uses up the crawls' share (75 % of the default 900) of today's embedding requests. */
+async function spendCrawlEmbedShare(): Promise<void> {
+  await incrementQuota(db, railKey('embed_daily', 'global', NOW), 675, new Date(NOW.getTime() + 24 * 60 * 60 * 1000), NOW);
 }
 
 async function demo(): Promise<{ status: number; body: DemoBody }> {
@@ -123,6 +131,13 @@ describe('GET /api/demo-config', () => {
     vi.setSystemTime(new Date(NOW.getTime() + 60 * 60 * 1000));
     expect((await demo()).body.status).toBe('crawling');
     expect(background).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not start the demo crawl once crawls spent their embedding share', async () => {
+    await spendCrawlEmbedShare();
+    const created = await demo();
+    expect(created.status).toBe(429);
+    expect(background).not.toHaveBeenCalled();
   });
 
   it('does not re-crawl a failed demo agent whose crawl lock is held', async () => {

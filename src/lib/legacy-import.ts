@@ -18,6 +18,7 @@ import {
   type AgentWithIdInput,
 } from '@/lib/db/agents';
 import { REEMBED_REQUIRED_ERROR } from '@/lib/db/schema';
+import { embedRailSpent } from '@/lib/rails';
 import { ensureCapacity } from '@/lib/sweep';
 
 /** The fields of an exported agent that the import uses. */
@@ -99,8 +100,17 @@ export function mapLegacyAgent(agent: LegacyAgent, now: Date, limits: Limits): A
   };
 }
 
-/** `recrawled`: the row already existed, unowned and emptied by an embedding migration, and was crawled again. */
-export type ImportAction = 'inserted' | 'replaced' | 'recrawled' | 'exists' | 'skipped' | 'conflict';
+/**
+ * `recrawled`: the row already existed, unowned and emptied by an embedding migration, and was
+ * crawled again from scratch. `resumed`: an unowned row left `crawling` (e.g. by a paused
+ * import) was crawled on from where it stopped.
+ */
+export type ImportAction = 'inserted' | 'replaced' | 'recrawled' | 'resumed' | 'exists' | 'skipped' | 'conflict';
+
+/** Crawl error (and run stop) when crawls have spent their share of today's embeddings. */
+export const EMBED_LIMIT_PAUSE = 'paused: daily embedding limit spent, re-run after 00:00 UTC';
+/** Crawl error when a slice added no pages (rate limited); the crawl stays `crawling` for a re-run. */
+export const NO_PROGRESS_PAUSE = 'paused: a slice added no pages (rate limited), re-run later';
 
 export interface ImportResult {
   id: string;
@@ -140,13 +150,18 @@ async function place(
   if (SKIP_DOMAINS.has(input.domain)) return { action: 'skipped', note: 'skipped: on the skip list', wrote: false };
   const existing = await getAgentById(db, input.id);
   if (existing) {
-    // Only rows an embedding migration emptied are re-crawled; other failures stay as they are.
+    // Only rows an embedding migration emptied are re-crawled, and unfinished crawls resumed;
+    // other rows stay as they are.
     const needsReembed = existing.status === 'failed' && existing.lastError === REEMBED_REQUIRED_ERROR;
-    if (!needsReembed || existing.ownerTokenHash) return { action: 'exists', wrote: false };
-    if (dryRun) return { action: 'recrawled', wrote: false };
-    const refusal = await guard();
-    if (refusal) return { action: 'conflict', wrote: false, stopped: refusal };
-    return { action: 'recrawled', wrote: true };
+    const unfinished = existing.status === 'crawling';
+    if ((!needsReembed && !unfinished) || existing.ownerTokenHash) return { action: 'exists', wrote: false };
+    const action: ImportAction = needsReembed ? 'recrawled' : 'resumed';
+    if (dryRun) return { action, wrote: false };
+    if (needsReembed) {
+      const refusal = await guard();
+      if (refusal) return { action: 'conflict', wrote: false, stopped: refusal };
+    }
+    return { action, wrote: true };
   }
   const sameDomain = await getAgentByDomain(db, input.domain);
   if (sameDomain?.ownerTokenHash) {
@@ -161,14 +176,21 @@ async function place(
   return { action: sameDomain ? 'replaced' : 'inserted', wrote: true };
 }
 
-/** Crawls to the end, slice after slice (an operator run has no function time limit). */
-async function crawlLocked(
-  db: Db,
-  id: string,
-  opts: ImportOptions,
-  reset: boolean,
-): Promise<Pick<ImportResult, 'crawl' | 'crawlError'>> {
-  if (!(await tryLockCrawl(db, id, opts.now, opts.limits))) {
+interface LockedCrawl extends Pick<ImportResult, 'crawl' | 'crawlError'> {
+  /** Set when the whole run must stop (crawls spent today's embedding share). */
+  stopRun?: string;
+}
+
+/**
+ * Crawls slice after slice (an operator run has no function time limit) until the crawl ends,
+ * or pauses: when crawls have spent today's embedding share (the run stops), or when a slice
+ * added no pages. A paused crawl stays `crawling`; a later run resumes it.
+ */
+async function crawlLocked(db: Db, id: string, opts: ImportOptions, reset: boolean): Promise<LockedCrawl> {
+  const paused = (crawl: CrawlOutcome | null): LockedCrawl => ({ crawl, crawlError: EMBED_LIMIT_PAUSE, stopRun: EMBED_LIMIT_PAUSE });
+  if (await embedRailSpent(db, new Date(), opts.limits, 'crawl')) return paused(null);
+  // A fresh time per agent: the run's start time could already be past the lock's lifetime.
+  if (!(await tryLockCrawl(db, id, new Date(), opts.limits))) {
     return { crawl: null, crawlError: 'another crawl already holds the lock' };
   }
   try {
@@ -176,6 +198,8 @@ async function crawlLocked(
     const deps = createCrawlDeps();
     let outcome = await runCrawl(id, deps);
     while (outcome.status === 'crawling') {
+      if (await embedRailSpent(db, new Date(), opts.limits, 'crawl')) return paused(outcome);
+      if (outcome.pagesThisSlice === 0) return { crawl: outcome, crawlError: NO_PROGRESS_PAUSE };
       // Each slice gets a fresh lock lifetime, so a long import never loses the lock mid-crawl.
       await renewCrawlLock(db, id, new Date(), opts.limits);
       outcome = await runCrawl(id, deps);
@@ -209,11 +233,15 @@ export async function importLegacyAgents(
     const placed = await place(db, input, opts.dryRun === true, guard);
     if (placed.stopped) return { results, stopped: placed.stopped };
     const result: ImportResult = { id: input.id, domain: input.domain, action: placed.action, note: placed.note, crawl: null };
+    let stopRun: string | undefined;
     if (placed.wrote && opts.crawl) {
-      Object.assign(result, await crawlLocked(db, input.id, opts, placed.action === 'recrawled'));
+      const { stopRun: stop, ...crawled } = await crawlLocked(db, input.id, opts, placed.action === 'recrawled');
+      Object.assign(result, crawled);
+      stopRun = stop;
     }
     results.push(result);
     opts.onResult?.(result);
+    if (stopRun) return { results, stopped: stopRun };
   }
   return { results, stopped: null };
 }

@@ -183,7 +183,7 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
   let embedQuotaSpent = false;
   const embedStartedAt = Date.now();
   try {
-    [embedding] = await embedTexts([question], 'query', { beforeRequest: embedRequestGate(db, limits) });
+    [embedding] = await embedTexts([question], 'query', { beforeRequest: embedRequestGate(db, limits, 'chat') });
   } catch (error) {
     if (error instanceof EmbeddingQuotaError) embedQuotaSpent = true;
     else console.error('Could not embed the chat question', error);
