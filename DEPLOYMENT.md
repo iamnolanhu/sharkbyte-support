@@ -58,7 +58,7 @@ PostHog project key is the only public one.
 | `MAX_FIRECRAWL_PER_DAY` | no | `50` | Firecrawl scrapes per UTC day, app-wide |
 | `POSTHOG_API_KEY` | no | | Server-side PostHog events |
 | `POSTHOG_HOST` | no | posthog-node default | Server-side PostHog host |
-| `NEXT_PUBLIC_POSTHOG_KEY` | no | | Browser PostHog: pageviews, autocapture and session replay on the site; named events only inside the embed widget |
+| `NEXT_PUBLIC_POSTHOG_KEY` | no | | Browser PostHog: pageviews, autocapture and session replay on the site and inside the embed widget |
 | `NEXT_PUBLIC_POSTHOG_HOST` | no | `https://us.i.posthog.com` | Browser PostHog host |
 
 At least one LLM key must be set; `NVIDIA_API_KEY` counts, since it is required anyway.
@@ -87,8 +87,10 @@ PostHog is off when its keys are unset; nothing else depends on it.
 server-side (the `chat_completed` event: question up to 2,000 characters, answer up to 4,000, the
 provider and model that answered, token counts, latency and outcome). Visitors appear only as a hashed id of
 their IP address and browser; the raw IP is never sent. Embedded chats also record
-the hostname of the page hosting the widget. Tell your visitors accordingly, or leave
-`POSTHOG_API_KEY` unset to log nothing.
+the hostname of the page hosting the widget. When `NEXT_PUBLIC_POSTHOG_KEY` is set, the browser
+also records session replays and autocaptured clicks on every surface, the embed widget inside
+customer sites included, so chat content typed and shown in those sessions is recorded to PostHog
+too. Tell your visitors accordingly, or leave both keys unset to log nothing.
 
 ---
 

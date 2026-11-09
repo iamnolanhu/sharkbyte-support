@@ -43,24 +43,26 @@ describe('analytics client', () => {
     expect(initAnalytics('embed')).toBe(true);
 
     expect(posthogMock.init).toHaveBeenCalledTimes(1);
-    // Inside customer sites: no replay, no autocapture family, named events only.
+    // Inside customer sites too: replay and the autocapture family are on.
     expect(posthogMock.init).toHaveBeenCalledWith('phc_test_placeholder', {
       api_host: 'https://us.i.posthog.com',
       capture_pageview: 'history_change',
-      autocapture: false,
-      rageclick: false,
-      capture_dead_clicks: false,
-      capture_heatmaps: false,
-      disable_session_recording: true,
+      autocapture: true,
+      rageclick: true,
+      capture_dead_clicks: true,
+      capture_heatmaps: true,
+      disable_session_recording: false,
     });
     expect(posthogMock.register).toHaveBeenCalledTimes(1);
-    expect(posthogMock.register).toHaveBeenCalledWith({ app: 'sharkbyte', surface: 'embed' });
+    expect(posthogMock.register).toHaveBeenCalledWith(
+      expect.objectContaining({ app: 'sharkbyte', surface: 'embed', host_domain: expect.any(String) }),
+    );
 
     track('demo_limit_hit', { rail: 'chat_tokens' });
     expect(posthogMock.capture).toHaveBeenCalledWith('demo_limit_hit', { rail: 'chat_tokens' });
   });
 
-  it('initAnalytics turns on replay and autocapture on the site surface only', async () => {
+  it('initAnalytics turns on replay and autocapture on the site surface', async () => {
     vi.stubEnv('NEXT_PUBLIC_POSTHOG_KEY', 'phc_test_placeholder');
     vi.stubEnv('NEXT_PUBLIC_POSTHOG_HOST', '');
     const { initAnalytics, track } = await loadClient();

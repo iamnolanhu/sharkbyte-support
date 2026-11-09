@@ -18,28 +18,39 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 
 let initialized = false;
 
+/** The hostname of the page embedding the widget (from the iframe's referrer), or 'unknown'. */
+function embeddingHost(): string {
+  try {
+    return new URL(document.referrer).hostname || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 /**
- * Starts PostHog once per page and tags every event with the app and surface.
- * Off (returns false) without NEXT_PUBLIC_POSTHOG_KEY.
+ * Starts PostHog once per page and tags every event with the app and surface (and, inside the
+ * embed widget, the embedding page's hostname). Off (returns false) without NEXT_PUBLIC_POSTHOG_KEY.
  */
 export function initAnalytics(surface: AnalyticsSurface): boolean {
   // Literal process.env reads so Next.js inlines them into the client bundle.
   const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
   if (!key) return false;
   if (initialized) return true;
-  // Replay and behavioural capture run on our own site only. Inside customer sites (the
-  // embed iframe) they are switched off explicitly, so PostHog remote settings can't turn them on.
-  const site = surface === 'site';
+  // Session replay and autocapture run on every surface, the embed widget included.
   posthog.init(key, {
     api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || DEFAULT_POSTHOG_HOST,
     capture_pageview: 'history_change',
-    autocapture: site,
-    rageclick: site,
-    capture_dead_clicks: site,
-    capture_heatmaps: site,
-    disable_session_recording: !site,
+    autocapture: true,
+    rageclick: true,
+    capture_dead_clicks: true,
+    capture_heatmaps: true,
+    disable_session_recording: false,
   });
-  posthog.register({ app: 'sharkbyte', surface });
+  posthog.register(
+    surface === 'embed'
+      ? { app: 'sharkbyte', surface, host_domain: embeddingHost() }
+      : { app: 'sharkbyte', surface },
+  );
   initialized = true;
   return true;
 }
