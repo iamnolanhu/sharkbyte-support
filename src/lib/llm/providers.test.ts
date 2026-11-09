@@ -8,9 +8,11 @@ const SSE_BODY =
 
 describe('parseProviderList', () => {
   it('parseProviderList defaults and filters', () => {
-    expect(parseProviderList(undefined)).toEqual(['cerebras', 'openrouter', 'nvidia']);
-    expect(parseProviderList('')).toEqual(['cerebras', 'openrouter', 'nvidia']);
-    expect(parseProviderList('bogus, other')).toEqual(['cerebras', 'openrouter', 'nvidia']);
+    expect(parseProviderList(undefined)).toEqual(['nvidia', 'gemini']);
+    expect(parseProviderList('')).toEqual(['nvidia', 'gemini']);
+    expect(parseProviderList('bogus, other')).toEqual(['nvidia', 'gemini']);
+    // OpenRouter and Cerebras stay supported by name.
+    expect(parseProviderList('gemini,openrouter,cerebras')).toEqual(['gemini', 'openrouter', 'cerebras']);
     expect(parseProviderList('nvidia, bogus,NVIDIA')).toEqual(['nvidia']);
     expect(parseProviderList(' OpenRouter ,cerebras')).toEqual(['openrouter', 'cerebras']);
   });
@@ -19,8 +21,14 @@ describe('parseProviderList', () => {
 describe('getLlmEnv', () => {
   it('reads models, keys and the first-byte timeout with defaults', () => {
     const env = getLlmEnv({});
-    expect(env.providers).toEqual(['cerebras', 'openrouter', 'nvidia']);
+    expect(env.providers).toEqual(['nvidia', 'gemini']);
     expect(env.firstByteTimeoutMs).toBe(8000);
+    expect(env.geminiModel).toBe('gemini-3.5-flash-lite');
+    expect(env.geminiKey).toBeUndefined();
+    expect(getLlmEnv({ GEMINI_API_KEY: ' g-key ', GEMINI_LLM_MODEL: 'gemini-x' })).toMatchObject({
+      geminiKey: 'g-key',
+      geminiModel: 'gemini-x',
+    });
     expect(env.cerebrasModel).toBe('gpt-oss-120b');
     expect(env.nvidiaModel).toBe('nvidia/nemotron-3.5-lightning-30b-a3b');
     expect(env.openrouterModel.endsWith(':free')).toBe(true);
@@ -70,11 +78,40 @@ describe('buildChain', () => {
   });
 
   it('missing keys become null entries', () => {
-    const chain = buildChain(getLlmEnv({ NVIDIA_API_KEY: 'nv-test' }));
+    const chain = buildChain(getLlmEnv({ NVIDIA_API_KEY: 'nv-test', LLM_PROVIDERS: 'cerebras,openrouter,nvidia' }));
     expect(chain.map((e) => e.name)).toEqual(['cerebras', 'openrouter', 'nvidia']);
     expect(chain[0]?.model).toBeNull();
     expect(chain[1]?.model).toBeNull();
     expect(chain[2]?.model?.modelId).toBe('nvidia/nemotron-3.5-lightning-30b-a3b');
+  });
+
+  it('the default chain is nvidia then gemini; gemini is skipped without GEMINI_API_KEY', () => {
+    const withoutKey = buildChain(getLlmEnv({ NVIDIA_API_KEY: 'n' }));
+    expect(withoutKey.map((e) => [e.name, e.model?.modelId ?? null])).toEqual([
+      ['nvidia', 'nvidia/nemotron-3.5-lightning-30b-a3b'],
+      ['gemini', null],
+    ]);
+    const withKey = buildChain(getLlmEnv({ NVIDIA_API_KEY: 'n', GEMINI_API_KEY: 'g' }));
+    expect(withKey[1]?.model?.modelId).toBe('gemini-3.5-flash-lite');
+  });
+
+  it('gemini calls the OpenAI-compatible endpoint with its key and a low thinking budget', async () => {
+    const calls: { url: string; headers: Headers; body: Record<string, unknown> }[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      calls.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+      return new Response(SSE_BODY, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    const [entry] = buildChain(getLlmEnv({ GEMINI_API_KEY: 'g-test', LLM_PROVIDERS: 'gemini' }), fetchImpl);
+    if (!entry?.model) throw new Error('gemini entry has no model');
+    const result = await entry.model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      maxOutputTokens: 600,
+    });
+    await result.stream.cancel();
+
+    expect(calls[0]?.url).toBe('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
+    expect(calls[0]?.headers.get('Authorization')).toBe('Bearer g-test');
+    expect(calls[0]?.body).toMatchObject({ model: 'gemini-3.5-flash-lite', reasoning_effort: 'low', max_tokens: 600 });
   });
 
   it('keeps reasoning models inside the answer budget', async () => {
@@ -84,7 +121,7 @@ describe('buildChain', () => {
       return new Response(SSE_BODY, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
     };
     const chain = buildChain(
-      getLlmEnv({ CEREBRAS_API_KEY: 'c', OPENROUTER_API_KEY: 'o', NVIDIA_API_KEY: 'n' }),
+      getLlmEnv({ CEREBRAS_API_KEY: 'c', OPENROUTER_API_KEY: 'o', NVIDIA_API_KEY: 'n', LLM_PROVIDERS: 'cerebras,openrouter,nvidia' }),
       fetchImpl,
     );
     for (const entry of chain) {
@@ -116,6 +153,11 @@ describe('buildChain', () => {
       chat_template_kwargs: { enable_thinking: false },
     });
     expect(reasoningFields('google/gemma-4-31b-it:free')).toEqual({});
+    // Gemini 2.5 Flash can switch thinking off; 2.5 Pro and Gemini 3 cannot, so they think low.
+    expect(reasoningFields('gemini-2.5-flash')).toEqual({ reasoning_effort: 'none' });
+    expect(reasoningFields('gemini-2.5-flash-lite')).toEqual({ reasoning_effort: 'none' });
+    expect(reasoningFields('gemini-2.5-pro')).toEqual({ reasoning_effort: 'low' });
+    expect(reasoningFields('gemini-3.5-flash-lite')).toEqual({ reasoning_effort: 'low' });
   });
 
   it('uses each provider base URL and model', async () => {
@@ -125,7 +167,7 @@ describe('buildChain', () => {
       return new Response(SSE_BODY, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
     };
     const chain = buildChain(
-      getLlmEnv({ CEREBRAS_API_KEY: 'c', OPENROUTER_API_KEY: 'o', NVIDIA_API_KEY: 'n' }),
+      getLlmEnv({ CEREBRAS_API_KEY: 'c', OPENROUTER_API_KEY: 'o', NVIDIA_API_KEY: 'n', LLM_PROVIDERS: 'cerebras,openrouter,nvidia' }),
       fetchImpl,
     );
     expect(chain.map((e) => e.model?.modelId)).toEqual([

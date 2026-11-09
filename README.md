@@ -62,7 +62,7 @@ SharkByte instantly creates an AI chatbot that can answer questions about any we
 - **Framework**: Next.js 16 (App Router + Turbopack), React 19, Tailwind CSS v4 + shadcn/ui
 - **Database**: Postgres with pgvector (Neon)
 - **Embeddings**: Google Gemini (`gemini-embedding-001`, 768 dimensions, free tier); NVIDIA Build as a fallback
-- **Chat**: a free LLM chain (Cerebras → OpenRouter → NVIDIA) streamed with AI SDK 7
+- **Chat**: a free LLM chain (NVIDIA → Gemini; Cerebras and OpenRouter optional) streamed with AI SDK 7
 - **Crawling**: built-in sitemap/HTML crawler, Firecrawl for JavaScript-rendered pages (optional)
 - **Analytics**: PostHog (optional)
 - **Hosting**: Vercel
@@ -80,8 +80,8 @@ Originally built on DigitalOcean Gradient AI for the MLH × DigitalOcean hackath
 
 - [Bun](https://bun.sh)
 - A Postgres database with the `vector` extension (a free [Neon](https://neon.tech) project works)
-- A [Gemini API](https://aistudio.google.com/apikey) key (free tier) for embeddings
-- One free LLM key: [Cerebras](https://cloud.cerebras.ai/), [OpenRouter](https://openrouter.ai/) or [NVIDIA Build](https://build.nvidia.com)
+- A [Gemini API](https://aistudio.google.com/apikey) key (free tier) for embeddings and chat
+- Optional: an [NVIDIA Build](https://build.nvidia.com) key for the first chat step ([Cerebras](https://cloud.cerebras.ai/) and [OpenRouter](https://openrouter.ai/) also work through `LLM_PROVIDERS`)
 
 ### Installation
 
@@ -95,7 +95,7 @@ bun install
 
 # Set up environment variables
 cp .env.example .env.local
-# Edit .env.local: DATABASE_URL, GEMINI_API_KEY and one LLM key at minimum
+# Edit .env.local: DATABASE_URL and GEMINI_API_KEY at minimum
 
 # Run development server
 bun run dev
@@ -110,13 +110,11 @@ The database schema creates itself on the first request.
 ```env
 # Required
 DATABASE_URL=postgres://...        # Postgres with pgvector
-GEMINI_API_KEY=                    # Embeddings (Gemini API free tier)
-# ...and at least one LLM key:
-CEREBRAS_API_KEY=                  # Fastest free LLM, first in the chain
-OPENROUTER_API_KEY=                # Free OpenRouter models
-NVIDIA_API_KEY=                    # Last LLM in the chain
+GEMINI_API_KEY=                    # Embeddings and the Gemini chat step (free tier)
 
 # Optional
+NVIDIA_API_KEY=                    # First LLM in the chain (Gemini answers without it)
+LLM_PROVIDERS=                     # Chain order (default nvidia,gemini; cerebras, openrouter optional)
 FIRECRAWL_API_KEY=                 # JavaScript-rendered pages (capped free key)
 CRON_SECRET=                       # Protects the daily storage sweep
 NEXT_PUBLIC_POSTHOG_KEY=           # Browser analytics (the only public key)
@@ -166,7 +164,7 @@ Deploy to Vercel with one click:
 Then:
 
 1. Add **Neon** from the Vercel Marketplace (Storage tab); it sets `DATABASE_URL` for you.
-2. Add `GEMINI_API_KEY` and at least one LLM key (`CEREBRAS_API_KEY`, `OPENROUTER_API_KEY` or `NVIDIA_API_KEY`).
+2. Add `GEMINI_API_KEY` (embeddings and chat), and optionally `NVIDIA_API_KEY` for the first chat step.
 3. Optionally add `CRON_SECRET`, `FIRECRAWL_API_KEY` and the PostHog keys.
 4. Redeploy. The schema creates itself on the first request.
 

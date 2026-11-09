@@ -14,7 +14,8 @@ variable, the free-tier rails that keep a public demo inside those quotas, and t
 2. **Database:** in the project's Storage tab, add **Neon** from the Vercel Marketplace. It sets
    `DATABASE_URL` for every environment. Any Postgres with the `vector` extension works too.
 3. **Keys:** add `GEMINI_API_KEY` (required: embeddings; a free key from Google AI Studio) and at
-   least one LLM key: `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY` and/or `NVIDIA_API_KEY`.
+   optionally `NVIDIA_API_KEY` (first in the default chat chain; Gemini answers when it is unset or
+   down). `CEREBRAS_API_KEY` and `OPENROUTER_API_KEY` only matter if `LLM_PROVIDERS` names them.
 4. **Optional:** `CRON_SECRET` (protects the daily sweep), `FIRECRAWL_API_KEY`, and the PostHog keys.
 5. Redeploy. The schema (tables and the `vector` extension) creates itself on the first request.
 
@@ -22,7 +23,7 @@ variable, the free-tier rails that keep a public demo inside those quotas, and t
 
 ```bash
 bun install
-cp .env.example .env.local   # fill in DATABASE_URL, GEMINI_API_KEY and one LLM key at minimum
+cp .env.example .env.local   # fill in DATABASE_URL and GEMINI_API_KEY at minimum
 bun run dev
 bun run test                 # unit tests (in-memory Postgres, no network database)
 ```
@@ -39,10 +40,11 @@ PostHog project key is the only public one.
 | `DATABASE_URL` | yes | | Postgres connection string (pgvector) |
 | `GEMINI_API_KEY` | yes | | Gemini API key for embeddings (free tier) |
 | `NVIDIA_API_KEY` | no | | NVIDIA step of the LLM chain; embeddings when `EMBEDDING_PROVIDER=nvidia` |
-| `CEREBRAS_API_KEY` | no | | Cerebras step of the LLM chain |
-| `OPENROUTER_API_KEY` | no | | OpenRouter step of the LLM chain (free models) |
+| `GEMINI_LLM_MODEL` | no | `gemini-3.5-flash-lite` | Gemini chat model (OpenAI-compatible endpoint, same `GEMINI_API_KEY`) |
+| `CEREBRAS_API_KEY` | no | | Cerebras step of the LLM chain (when `LLM_PROVIDERS` names it) |
+| `OPENROUTER_API_KEY` | no | | OpenRouter step of the LLM chain, free models (when `LLM_PROVIDERS` names it) |
 | `OPENROUTER_MODEL` | no | `google/gemma-4-31b-it:free` | OpenRouter model id |
-| `LLM_PROVIDERS` | no | `cerebras,openrouter,nvidia` | Provider order; providers without a key are skipped |
+| `LLM_PROVIDERS` | no | `nvidia,gemini` | Provider order from `nvidia`, `gemini`, `cerebras`, `openrouter`; providers without a key are skipped |
 | `LLM_FIRST_BYTE_TIMEOUT_MS` | no | `8000` | Wait for a provider's first token before falling back |
 | `LLM_MODEL` | no | `gpt-oss-120b` | Cerebras model id |
 | `NVIDIA_LLM_MODEL` | no | `nvidia/nemotron-3.5-lightning-30b-a3b` | NVIDIA chat model id |
@@ -66,17 +68,20 @@ PostHog project key is the only public one.
 | `NEXT_PUBLIC_POSTHOG_KEY` | no | | Browser PostHog: pageviews, autocapture and session replay on the site and inside the embed widget |
 | `NEXT_PUBLIC_POSTHOG_HOST` | no | `https://us.i.posthog.com` | Browser PostHog host |
 
-At least one LLM key must be set: `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY` or `NVIDIA_API_KEY`.
+`GEMINI_API_KEY` already serves chat (the `gemini` step), so no other LLM key is required.
 
 **Model ids go stale.** NVIDIA and Cerebras retire hosted models. An HTTP 410 in the logs ("has
 reached its end of life") means the id is gone, and a 404 "Function not found for account" means
 it isn't served to your key. Pick a live id from the provider's `/v1/models` list and set
-`NVIDIA_LLM_MODEL` or `LLM_MODEL`; no code change is needed.
+`NVIDIA_LLM_MODEL`, `GEMINI_LLM_MODEL` or `LLM_MODEL`; no code change is needed. Gemini answers
+404 "no longer available to new users" for retired ids (gemini-2.5-flash, November 2026).
 
 **Reasoning models.** Answers get 600 output tokens, and the first text must arrive within
 `LLM_FIRST_BYTE_TIMEOUT_MS`. The chain therefore sends gpt-oss models `reasoning_effort: "low"`
 and Nemotron models `chat_template_kwargs: { enable_thinking: false }`; with thinking on, a
-Nemotron model can spend the whole budget thinking and send no answer.
+Nemotron model can spend the whole budget thinking and send no answer. Gemini 2.5 Flash models get
+`reasoning_effort: "none"`, and other Gemini models (2.5 Pro, 3.x, which cannot turn thinking
+off) get `"low"`.
 
 **Embeddings.** Gemini's free tier allows about 100 requests a minute, 30,000 tokens a minute
 and 1,000 requests a day per Google Cloud project. Requests therefore carry at most 100 inputs

@@ -35,6 +35,12 @@ const PROVIDERS: Record<ProviderName, ProviderSpec> = {
     apiKey: (env) => env.nvidiaKey,
     modelId: (env) => env.nvidiaModel,
   },
+  // Gemini's OpenAI-compatible endpoint, with the GEMINI_API_KEY embeddings already use.
+  gemini: {
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    apiKey: (env) => env.geminiKey,
+    modelId: (env) => env.geminiModel,
+  },
 };
 
 /** The OpenAI-compatible API root a provider is called at (LLM analytics `$ai_base_url`). */
@@ -46,11 +52,14 @@ export function providerBaseUrl(name: ProviderName): string {
  * Request fields that keep a reasoning model's thinking out of the way: answers get 600 output
  * tokens and the first text must arrive within the first-byte timeout. Nemotron models think by
  * default and can spend the whole budget doing it, so thinking is switched off; gpt-oss models
- * reason at low effort.
+ * reason at low effort. Gemini 2.5 Flash models switch thinking off with reasoning_effort "none";
+ * other Gemini models (2.5 Pro, 3) cannot, so they think at "low".
  */
 export function reasoningFields(modelId: string): Record<string, unknown> {
   if (modelId.includes('nemotron')) return { chat_template_kwargs: { enable_thinking: false } };
   if (modelId.includes('gpt-oss')) return { reasoning_effort: 'low' };
+  if (modelId.startsWith('gemini-2.5') && !modelId.includes('pro')) return { reasoning_effort: 'none' };
+  if (modelId.startsWith('gemini')) return { reasoning_effort: 'low' };
   return {};
 }
 
