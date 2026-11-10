@@ -20,10 +20,10 @@ import {
   BANNED_VENDOR_NAMES,
   buildSystemPrompt,
   handleChat,
-  identityGuide,
   parseChatRequest,
   personaName,
-  VOICE_GUIDE,
+  toneExamples,
+  voiceGuide,
 } from './handle-chat';
 
 vi.mock('@/lib/analytics/server');
@@ -164,28 +164,21 @@ describe('buildSystemPrompt', () => {
     { url: 'https://a.example/2', title: 'Two', content: 'second body', score: 0.8 },
   ];
   const agent = { name: 'Sammy - reef.example', domain: 'reef.example', instruction: 'Be Sammy.' };
-  const identity = identityGuide(agent.name, agent.domain);
+  const scaffold = `Be Sammy.\n\n${voiceGuide(agent.name, agent.domain)}\n\n${toneExamples(agent.name, agent.domain)}\n\nWhat you know:\n\n`;
 
-  it('puts the instruction first, then who Sammy is, the voice guide, then each page with its title and link', () => {
-    const prompt = buildSystemPrompt(agent, pages);
-    expect(prompt).toBe(
-      `Be Sammy.\n\n${identity}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n` +
-        '## One\nLink: https://a.example/1\nfirst body\n\n' +
-        '## Two\nLink: https://a.example/2\nsecond body',
+  it('puts the instruction first, then the voice guide, the tone examples, then each page with its title and link', () => {
+    expect(buildSystemPrompt(agent, pages)).toBe(
+      scaffold + '## One\nLink: https://a.example/1\nfirst body\n\n' + '## Two\nLink: https://a.example/2\nsecond body',
     );
   });
 
   it('gives curated knowledge no link line (it is not a page)', () => {
     const knowledge = { url: 'knowledge://sharkbyte', title: 'Open source', content: 'Open source\n\nOn GitHub.', score: 0.9 };
-    expect(buildSystemPrompt(agent, [knowledge])).toBe(
-      `Be Sammy.\n\n${identity}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n## Open source\nOpen source\n\nOn GitHub.`,
-    );
+    expect(buildSystemPrompt(agent, [knowledge])).toBe(`${scaffold}## Open source\nOpen source\n\nOn GitHub.`);
   });
 
   it('says plainly when nothing matched', () => {
-    expect(buildSystemPrompt(agent, [])).toBe(
-      `Be Sammy.\n\n${identity}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\nNothing that matches this question.`,
-    );
+    expect(buildSystemPrompt(agent, [])).toBe(`${scaffold}Nothing that matches this question.`);
   });
 
   it('has none of the words that make Sammy hedge or talk about its sources', () => {
@@ -210,78 +203,106 @@ describe('buildSystemPrompt', () => {
     }
   });
 
-  it('speaks for the site and explains what to do when it does not know', () => {
-    expect(VOICE_GUIDE).toContain('"we", "our" and "us"');
-    expect(VOICE_GUIDE).toContain('2-4 short sentences');
-    expect(VOICE_GUIDE).toContain('When what you know does not cover the question, say so plainly');
-    expect(VOICE_GUIDE).toContain('how to reach the team');
-    expect(VOICE_GUIDE).toContain('Never make up facts');
-    expect(VOICE_GUIDE).toContain('Share a link only when the visitor asks');
-    expect(VOICE_GUIDE).toContain('Never use em dashes or en dashes');
-  });
-
-  it('makes "we" the first rule, with a before and after', () => {
-    const first = VOICE_GUIDE.split('\n')[1];
-    expect(first).toContain('"we", "our" and "us", never "I", for anything the business does');
-    expect(first).toContain('Before: "I offer a free trial and I can set that up." After: "We offer a free trial, and we can set that up."');
-  });
-
-  it('bans the stock closers by example', () => {
-    expect(VOICE_GUIDE).toContain('End on the answer itself, or on one specific question about what they need.');
-    for (const closer of ['"Let me know if you want to…"', '"How can I help you today?"', '"Feel free to…"', '"I hope this helps"']) {
-      expect(VOICE_GUIDE).toContain(closer);
-    }
-  });
-
-  it('meets rudeness with an acknowledgement, a question and the human contact path', () => {
-    expect(VOICE_GUIDE).toContain(
-      'acknowledge it in a few words, ask what they were trying to do, and if what you know has a way to reach a person',
-    );
+  it('never puts a model or vendor name in front of the model', () => {
+    const prompt = buildSystemPrompt(agent, pages);
+    for (const vendor of BANNED_VENDOR_NAMES) expect(prompt, vendor).not.toMatch(new RegExp(`\\b${vendor}\\b`, 'i'));
   });
 });
 
-describe('identityGuide', () => {
-  const guide = identityGuide('Sammy - reef.example', 'reef.example');
+describe('voiceGuide', () => {
+  const guide = voiceGuide('Sammy - reef.example', 'reef.example');
+  const principles = guide.split('\n').filter((line) => /^\d+\. /.test(line));
 
-  it('makes Sammy the site support assistant built with SharkByte Support', () => {
-    expect(guide).toContain(
-      'You are Sammy, the support assistant for reef.example, built with SharkByte Support (an open-source project by Nolan Hu).',
-    );
-    expect(guide).toContain(
-      'When someone asks who made you, what you are, what model you are or run on, what powers you, or what AI this is',
-    );
-    expect(guide).toContain(
-      'reply like this example and add nothing about what runs you: "I\'m the reef.example support assistant, built with SharkByte Support, an open-source project by Nolan Hu. What are you looking for on reef.example?"',
+  it('opens with who Sammy is: the site assistant built with SharkByte Support', () => {
+    expect(guide.split('\n')[0]).toBe(
+      'You are Sammy, the support assistant for reef.example, built with SharkByte Support, an open-source project by Nolan Hu.',
     );
   });
 
-  it('bans naming a model vendor or calling itself a language model', () => {
-    expect(guide).toContain('never name an AI company, cloud or model');
-    expect(guide).toContain('never say you are powered by or run on one');
-    for (const vendor of ['NVIDIA', 'Nemotron', 'Google', 'Gemini', 'OpenAI', 'DigitalOcean', 'Gradient']) {
-      expect(BANNED_VENDOR_NAMES).toContain(vendor);
-      expect(guide).toContain(vendor);
+  it('is at most 8 short principles, with no sample reply to echo', () => {
+    expect(principles).toHaveLength(8);
+    for (const line of principles) expect(line.length, line).toBeLessThan(230);
+    expect(guide).not.toMatch(/reply like this/i);
+    expect(guide).not.toMatch(/Before: ".*" After: "/);
+  });
+
+  it('covers the eight principles in order', () => {
+    const expected = [
+      '"we", "our" and "us"',
+      'warm and specific',
+      'Answer first. Add one natural follow-up question only when it helps',
+      'plain English with no dashes',
+      'has nothing to do with reef.example',
+      "tell them we're not sure and how to reach us",
+      'Never name the AI, model, company or cloud that powers you',
+      'write out reef.example at most once in a reply',
+    ];
+    expected.forEach((phrase, i) => expect(principles[i]).toContain(phrase));
+    expect(principles[1]).toContain('2 to 4 sentences');
+    expect(principles[5]).toContain('Never make up prices, hours, names or policies.');
+    expect(principles[6]).toContain("say you're built with SharkByte Support");
+  });
+
+  it('bans the stock openers and closers by name', () => {
+    for (const phrase of ['"Great question"', '"Let me know if…"', '"Feel free to…"', '"How can I help you today?"']) {
+      expect(principles[3]).toContain(phrase);
     }
-    expect(guide).toContain('never call yourself a language model or say you were trained by anyone');
   });
 
-  it('describes what Sammy can do as help with the site, not general assistant work', () => {
-    expect(guide).toContain('you help with questions about reef.example: what we offer, how things work and where to find things');
-    expect(guide).toContain("Don't offer general assistant work such as brainstorming ideas or writing help.");
-  });
-
-  it('turns away out-of-scope requests in one sentence and asks about the site', () => {
-    expect(guide).toContain('Anything that has nothing to do with reef.example (the weather, pasted text to summarize or translate');
-    expect(guide).toContain(
-      "Say in one plain sentence that we don't do that here, then ask one specific question about what they need from reef.example.",
-    );
-    expect(guide).toContain('never say "I\'m not sure about that one" for something that is simply out of scope');
+  it('drops the curt out-of-scope template', () => {
+    expect(guide).not.toContain("we don't do that here");
+    expect(toneExamples('Sammy', 'reef.example')).not.toMatch(/we don't do that here/i);
   });
 
   it('takes the persona name from the agent name', () => {
     expect(personaName('Sammy - reef.example')).toBe('Sammy');
     expect(personaName('Finn')).toBe('Finn');
     expect(personaName(' - reef.example')).toBe('Sammy');
+    expect(voiceGuide('Finn', 'reef.example')).toMatch(/^You are Finn, /);
+  });
+});
+
+describe('toneExamples', () => {
+  const examples = toneExamples('Sammy - reef.example', 'reef.example');
+  const pairs = [...examples.matchAll(/^Example: (.+)\nVisitor: (.+)\nYou: (.+)$/gm)];
+
+  it('says they are examples of tone, not facts, and never to be copied', () => {
+    expect(examples.split('\n')[0]).toBe(
+      'Examples of our tone. They are made up to show how we sound; they are not facts about reef.example, and you never copy their sentences.',
+    );
+  });
+
+  it('shows the greeting, the AI question, both pricing cases, off topic, a paste and rudeness', () => {
+    expect(pairs.map((m) => m[1])).toEqual([
+      'a greeting',
+      'asked what AI it is',
+      'asked the price, when what you know says it is free',
+      'asked the price, when what you know has no prices',
+      'off topic',
+      'pasted text that has nothing to do with the site',
+      'a rude or frustrated visitor',
+    ]);
+  });
+
+  it('keeps every reply 2-4 sentences, dash free and free of stock closers', () => {
+    for (const [, , , reply] of pairs) {
+      const sentences = reply.split(/(?<=[.?!])\s+/).length;
+      expect(sentences, reply).toBeGreaterThanOrEqual(2);
+      expect(sentences, reply).toBeLessThanOrEqual(4);
+      expect(reply).not.toMatch(/[—–]|let me know|feel free|how can i help you today|great question|hope this helps/i);
+    }
+  });
+
+  it('deflects the AI question without naming anything and in other words than the voice guide', () => {
+    const reply = pairs[1][3];
+    expect(reply).not.toMatch(/SharkByte|model|powered|language model/i);
+    expect(voiceGuide('Sammy', 'reef.example')).not.toContain(reply);
+  });
+
+  it('writes the domain out at most once per reply and uses the persona name', () => {
+    for (const [, , , reply] of pairs) expect(reply.split('reef.example').length - 1, reply).toBeLessThanOrEqual(1);
+    expect(pairs[0][3]).toContain("I'm Sammy");
+    expect(toneExamples('Finn', 'reef.example')).toContain("I'm Finn");
   });
 });
 

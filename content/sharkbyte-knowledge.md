@@ -7,7 +7,7 @@ Public: no keys, ids or internal hostnames.
 
 ## What SharkByte Support is
 
-SharkByte Support turns any website into an AI support assistant in about a minute. You paste a website address, SharkByte reads the site's public pages, and you get a chat assistant called Sammy that answers visitors' questions about that site: what it offers, how things work and where to find things. There is no FAQ to write and no training to set up. It is free to try at sharkbyte-support.vercel.app.
+SharkByte Support turns any website into an AI support assistant in about a minute. You paste a website address, SharkByte reads the site's public pages, and you get a chat assistant called Sammy that answers visitors' questions about that site: what it offers, how things work and where to find things. There is no FAQ to write and no training to set up, and it is free to use.
 
 ## How to use SharkByte Support
 
@@ -37,6 +37,10 @@ Replace your-agent-id with the id shown on your agent's page (the snippet there 
 ## History and owning an agent
 
 There are no accounts. The browser that creates a Sammy keeps a private owner key for it, saved in that browser. With that key you can edit the agent's instructions, run Repair to read the site again, or delete the agent. Anyone can chat with an agent, but only the browser that made it can change it, so clearing that browser's storage loses the owner key. The History list shows the agents made in this browser along with the public showcase agents. Agents that nobody chats with for 14 days are removed to keep the free demo running, and failed ones are cleared after a day.
+
+## Pricing
+
+SharkByte Support is free. The hosted demo at sharkbyte-support.vercel.app costs nothing to use, within the limits listed under the free demo limits. There are no paid plans, no subscriptions and no sign-up, and it is not a free trial that turns into a paid plan. The code is open source, so anyone can also run their own copy for free.
 
 ## Free demo limits
 
