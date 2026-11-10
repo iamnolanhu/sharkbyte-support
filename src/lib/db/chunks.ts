@@ -1,3 +1,4 @@
+import type { Limits } from '@/lib/config';
 import type { ChunkInput, RetrievedChunk } from '@/types';
 import { isUuid } from './agents';
 import type { Db } from './client';
@@ -68,6 +69,53 @@ export async function insertChunksWithinCeiling(
     ...record,
   ]);
   return results[1]?.length ?? 0;
+}
+
+/**
+ * Replaces the agent's chunks stored under `sourceUrl` (curated knowledge, not a crawled page)
+ * with `chunks`, in order, as far as the per-agent cap and the global ceiling allow, and
+ * returns how many went in. Other chunks of the agent stay; `chunk_count` is recounted. One
+ * transaction behind CHUNK_CEILING_LOCK_ID, like every chunk write.
+ */
+export async function replaceSourceChunks(
+  db: Db,
+  agentId: string,
+  sourceUrl: string,
+  chunks: ChunkInput[],
+  limits: Pick<Limits, 'maxChunksPerAgent' | 'maxTotalChunks'>,
+): Promise<number> {
+  if (!isUuid(agentId)) return 0;
+  const results = await db.transaction([
+    { text: 'SELECT pg_advisory_xact_lock($1)', params: [CHUNK_CEILING_LOCK_ID] },
+    { text: 'DELETE FROM chunks WHERE agent_id = $1 AND url = $2', params: [agentId, sourceUrl] },
+    {
+      text: `INSERT INTO chunks (agent_id, url, title, pos, content, embedding)
+             SELECT $1::uuid, $2, t.title, t.pos, t.content, t.embedding::halfvec
+             FROM unnest($3::text[], $4::int[], $5::text[], $6::text[])
+               WITH ORDINALITY AS t(title, pos, content, embedding, ord)
+             ORDER BY t.ord
+             LIMIT GREATEST(LEAST(
+               $7::int - (SELECT count(*) FROM chunks WHERE agent_id = $1),
+               $8::int - (SELECT count(*) FROM chunks)
+             ), 0)
+             RETURNING id`,
+      params: [
+        agentId,
+        sourceUrl,
+        chunks.map((c) => c.title),
+        chunks.map((c) => c.pos),
+        chunks.map((c) => c.content),
+        chunks.map((c) => toVectorLiteral(c.embedding)),
+        limits.maxChunksPerAgent,
+        limits.maxTotalChunks,
+      ],
+    },
+    {
+      text: 'UPDATE agents SET chunk_count = (SELECT count(*) FROM chunks WHERE agent_id = $1) WHERE id = $1',
+      params: [agentId],
+    },
+  ]);
+  return results[2]?.length ?? 0;
 }
 
 interface ScoredRow {

@@ -137,13 +137,18 @@ export function identityGuide(agentName: string, domain: string): string {
 - When someone asks what you can do, say you help with questions about ${domain}: what we offer, how things work and where to find things. Don't offer general assistant work such as brainstorming ideas or writing help.`;
 }
 
+/** A page's link line; curated knowledge (a `knowledge://` url) has no page to link to. */
+function linkLine(url: string): string {
+  return /^https?:\/\//i.test(url) ? `Link: ${url}\n` : '';
+}
+
 /** The agent's instruction first, then who Sammy is, the voice guide, and what Sammy knows about the site. */
 export function buildSystemPrompt(
   agent: Pick<AgentRow, 'name' | 'domain' | 'instruction'>,
   chunks: RetrievedChunk[],
 ): string {
   const known = chunks.length
-    ? chunks.map((c) => `## ${c.title}\nLink: ${c.url}\n${c.content}`).join('\n\n')
+    ? chunks.map((c) => `## ${c.title}\n${linkLine(c.url)}${c.content}`).join('\n\n')
     : 'Nothing that matches this question.';
   return `${agent.instruction}\n\n${identityGuide(agent.name, agent.domain)}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n${known}`;
 }

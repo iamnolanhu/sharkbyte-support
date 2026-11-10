@@ -175,6 +175,13 @@ describe('buildSystemPrompt', () => {
     );
   });
 
+  it('gives curated knowledge no link line (it is not a page)', () => {
+    const knowledge = { url: 'knowledge://sharkbyte', title: 'Open source', content: 'Open source\n\nOn GitHub.', score: 0.9 };
+    expect(buildSystemPrompt(agent, [knowledge])).toBe(
+      `Be Sammy.\n\n${identity}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n## Open source\nOpen source\n\nOn GitHub.`,
+    );
+  });
+
   it('says plainly when nothing matched', () => {
     expect(buildSystemPrompt(agent, [])).toBe(
       `Be Sammy.\n\n${identity}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\nNothing that matches this question.`,

@@ -54,13 +54,24 @@ export async function continueCrawl(db: Db, agent: AgentRow, now: Date, limits: 
 const RECENT_PROGRESS_MS = 10_000;
 
 /**
+ * Work that runs after a crawl's reset and before its first slice, under the crawl lock (the
+ * demo agent's curated knowledge). A failure is logged and the crawl goes on without it.
+ */
+export type BeforeCrawl = () => Promise<void>;
+
+/**
  * Runs one crawl slice after the response. The caller holds the crawl lock; it is released when
  * the slice ends, or right away if the slice cannot be scheduled.
  */
-async function runSliceInBackground(db: Db, agentId: string): Promise<void> {
+async function runSliceInBackground(db: Db, agentId: string, beforeCrawl?: BeforeCrawl): Promise<void> {
   try {
     runInBackground(async () => {
       try {
+        if (beforeCrawl) {
+          await beforeCrawl().catch((err: unknown) => {
+            console.error(`[crawl] ${agentId} could not prepare the crawl:`, err instanceof Error ? err.message : err);
+          });
+        }
         await runCrawl(agentId, createCrawlDeps());
       } finally {
         await releaseCrawlLock(db, agentId);
@@ -73,9 +84,9 @@ async function runSliceInBackground(db: Db, agentId: string): Promise<void> {
 }
 
 /** `startLockedCrawl` for route handlers: a start that throws frees the lock instead of holding it for the TTL. */
-export async function startCrawlOrRelease(db: Db, agentId: string, now: Date): Promise<void> {
+export async function startCrawlOrRelease(db: Db, agentId: string, now: Date, beforeCrawl?: BeforeCrawl): Promise<void> {
   try {
-    await startLockedCrawl(db, agentId, now);
+    await startLockedCrawl(db, agentId, now, beforeCrawl);
   } catch (err) {
     await releaseCrawlLock(db, agentId);
     throw err;
@@ -136,7 +147,7 @@ async function railRefusal(db: Db, agentId: string, ip: string, now: Date, limit
 }
 
 /** Resets the agent and crawls in the background. The caller must already hold the crawl lock. */
-export async function startLockedCrawl(db: Db, agentId: string, now: Date): Promise<void> {
+export async function startLockedCrawl(db: Db, agentId: string, now: Date, beforeCrawl?: BeforeCrawl): Promise<void> {
   await resetForCrawl(db, agentId, now);
-  await runSliceInBackground(db, agentId);
+  await runSliceInBackground(db, agentId, beforeCrawl);
 }

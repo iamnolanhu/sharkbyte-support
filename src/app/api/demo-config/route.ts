@@ -1,9 +1,9 @@
-import { APP_DOMAIN, DEFAULT_INSTRUCTION, getLimits, type Limits } from '@/lib/config';
+import { DEFAULT_INSTRUCTION, getLimits, type Limits } from '@/lib/config';
 import { getDb, type Db } from '@/lib/db/client';
 import { getAgentByDomain, insertAgent, pinAgent } from '@/lib/db/agents';
 import { incrementQuota } from '@/lib/db/quota';
-import { domainKey } from '@/lib/crawl/url-guard';
 import { continueCrawl, releaseCrawlLock, startCrawlOrRelease, tryLockCrawl } from '@/lib/crawl/start-crawl';
+import { demoDomain, demoSiteUrl, seedDemoKnowledge } from '@/lib/demo-knowledge';
 import { ensureCapacity } from '@/lib/sweep';
 import { rateLimited } from '@/lib/agent-api';
 import { crawlEmbedRefusal } from '@/lib/rails';
@@ -16,13 +16,16 @@ export const dynamic = 'force-dynamic';
 
 const HOUR_MS = 60 * 60 * 1000;
 
-function siteUrl(): URL {
-  return new URL(/^https?:\/\//i.test(APP_DOMAIN) ? APP_DOMAIN : `https://${APP_DOMAIN}`);
-}
-
 function config(agent: AgentRow): Response {
   const body: DemoConfigResponse = { success: true, agentId: agent.id, status: agent.status };
   return Response.json(body);
+}
+
+/** Seeds the demo agent's curated knowledge before its crawl starts (the crawl adds the pages). */
+function seedKnowledge(db: Db, agentId: string, limits: Limits): () => Promise<void> {
+  return async () => {
+    await seedDemoKnowledge(db, agentId, { limits });
+  };
 }
 
 /** One re-crawl of the failed demo agent per clock hour, shared by every instance. */
@@ -54,7 +57,7 @@ async function revive(db: Db, agent: AgentRow, now: Date, limits: Limits): Promi
     await releaseCrawlLock(db, agent.id);
     return refused;
   }
-  await startCrawlOrRelease(db, agent.id, now);
+  await startCrawlOrRelease(db, agent.id, now, seedKnowledge(db, agent.id, limits));
   return config({ ...agent, status: 'crawling' });
 }
 
@@ -64,7 +67,7 @@ async function createDemoAgent(db: Db, domain: string, now: Date, limits: Limits
   if (refused) return refused;
   const agent = await insertAgent(db, {
     domain,
-    url: siteUrl().href,
+    url: demoSiteUrl().href,
     name: `Sammy - ${domain}`,
     instruction: DEFAULT_INSTRUCTION(domain),
     ownerTokenHash: null,
@@ -77,20 +80,23 @@ async function createDemoAgent(db: Db, domain: string, now: Date, limits: Limits
     if (!raced) throw new Error('Demo agent insert conflicted but no row exists');
     return config(raced);
   }
-  if (await tryLockCrawl(db, agent.id, now, limits)) await startCrawlOrRelease(db, agent.id, now);
+  if (await tryLockCrawl(db, agent.id, now, limits)) {
+    await startCrawlOrRelease(db, agent.id, now, seedKnowledge(db, agent.id, limits));
+  }
   return config(agent);
 }
 
 /**
  * GET /api/demo-config: the site's own pinned Sammy for the demo widget. Created on first
  * call; a stranger-made agent for the app domain is adopted (pinned, owner token dropped);
- * a failed one is re-crawled at most once an hour so the demo never stays dead.
+ * a failed one is re-crawled at most once an hour so the demo never stays dead. Every crawl it
+ * starts first seeds the curated knowledge (`content/sharkbyte-knowledge.md`).
  */
 export async function GET() {
   const db = getDb();
   const limits = getLimits();
   const now = new Date();
-  const domain = domainKey(siteUrl());
+  const domain = demoDomain();
 
   let agent = await getAgentByDomain(db, domain);
   if (!agent) return createDemoAgent(db, domain, now, limits);

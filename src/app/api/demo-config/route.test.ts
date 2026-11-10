@@ -9,6 +9,8 @@ import { runInBackground } from '@/lib/background';
 import { runCrawl } from '@/lib/crawl/run-crawl';
 import { tryLockCrawl } from '@/lib/crawl/start-crawl';
 import { domainKey } from '@/lib/crawl/url-guard';
+import { KNOWLEDGE_URL } from '@/lib/demo-knowledge';
+import { embedTexts } from '@/lib/embeddings';
 import { captureServer } from '@/lib/analytics/server';
 import { mintOwnerToken } from '@/lib/owner-token';
 import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
@@ -18,6 +20,7 @@ import { GET, maxDuration } from './route';
 vi.mock('@/lib/background', () => ({ runInBackground: vi.fn() }));
 vi.mock('@/lib/crawl/run-crawl', () => ({ runCrawl: vi.fn(), createCrawlDeps: vi.fn() }));
 vi.mock('@/lib/analytics/server');
+vi.mock('@/lib/embeddings', () => ({ embedTexts: vi.fn() }));
 
 const NOW = new Date('2026-11-05T10:15:00.000Z');
 const DEMO_DOMAIN = domainKey(new URL(/^https?:\/\//i.test(APP_DOMAIN) ? APP_DOMAIN : `https://${APP_DOMAIN}`));
@@ -32,6 +35,8 @@ beforeEach(async () => {
   vi.mocked(runCrawl).mockReset();
   vi.mocked(runCrawl).mockResolvedValue({} as Awaited<ReturnType<typeof runCrawl>>);
   vi.mocked(captureServer).mockReset();
+  vi.mocked(embedTexts).mockReset();
+  vi.mocked(embedTexts).mockImplementation(async (texts) => texts.map((_, i) => fakeEmbedding(i + 1)));
   vi.mocked(captureServer).mockResolvedValue(undefined);
   db = await createTestDb();
   setDbForTests(db);
@@ -68,6 +73,14 @@ async function demoRow(): Promise<AgentRow> {
   return row;
 }
 
+async function knowledgeChunkCount(agentId: string): Promise<number> {
+  const rows = await db.query<{ n: number | string }>(
+    'SELECT count(*) AS n FROM chunks WHERE agent_id = $1 AND url = $2',
+    [agentId, KNOWLEDGE_URL],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
 async function finishScheduledCrawls(): Promise<void> {
   for (const [job] of background.mock.calls) await job();
 }
@@ -88,6 +101,44 @@ describe('GET /api/demo-config', () => {
     expect(row.ownerTokenHash).toBeNull();
     expect(row.name).toBe(`Sammy - ${DEMO_DOMAIN}`);
     expect(background).toHaveBeenCalledTimes(1);
+  });
+
+  it('seeds the curated knowledge before the first crawl slice', async () => {
+    const { body } = await demo();
+    const id = body.agentId as string;
+    expect(await knowledgeChunkCount(id)).toBe(0);
+    await finishScheduledCrawls();
+
+    const seeded = await knowledgeChunkCount(id);
+    expect(seeded).toBeGreaterThan(5);
+    expect((await demoRow()).chunkCount).toBe(seeded);
+    expect(vi.mocked(embedTexts).mock.calls[0]?.[1]).toBe('passage');
+    expect(vi.mocked(embedTexts).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runCrawl).mock.invocationCallOrder[0] ?? 0);
+  });
+
+  it('still crawls when the knowledge cannot be seeded', async () => {
+    vi.mocked(embedTexts).mockRejectedValue(new Error('rate limited'));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { body } = await demo();
+    await finishScheduledCrawls();
+    expect(runCrawl).toHaveBeenCalledTimes(1);
+    expect(await knowledgeChunkCount(body.agentId as string)).toBe(0);
+    expect(errors).toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it('seeds the knowledge again when it re-crawls a failed demo agent', async () => {
+    await demo();
+    await finishScheduledCrawls();
+    const row = await demoRow();
+    const seeded = await knowledgeChunkCount(row.id);
+    await finishCrawl(db, row.id, { status: 'failed', lastError: 'boom' });
+
+    expect((await demo()).body.status).toBe('crawling');
+    // The re-crawl's reset dropped every chunk; the seed runs before the new crawl.
+    expect(await knowledgeChunkCount(row.id)).toBe(0);
+    await finishScheduledCrawls();
+    expect(await knowledgeChunkCount(row.id)).toBe(seeded);
   });
 
   it('pins a stranger-made agent for the app domain', async () => {

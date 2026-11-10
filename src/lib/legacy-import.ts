@@ -20,6 +20,7 @@ import {
   type AgentWithIdInput,
 } from '@/lib/db/agents';
 import { REEMBED_REQUIRED_ERROR } from '@/lib/db/schema';
+import { demoDomain, seedDemoKnowledge } from '@/lib/demo-knowledge';
 import { embedRailSpent } from '@/lib/rails';
 import { ensureCapacity, STALE_CRAWL_ERROR } from '@/lib/sweep';
 
@@ -191,9 +192,10 @@ interface LockedCrawl extends Pick<ImportResult, 'crawl' | 'crawlError'> {
 /**
  * Crawls slice after slice (an operator run has no function time limit) until the crawl ends,
  * or pauses: when crawls have spent today's embedding share (the run stops), or when a slice
- * added no pages. A paused crawl stays `crawling`; a later run resumes it.
+ * added no pages. A paused crawl stays `crawling`; a later run resumes it. The demo agent's
+ * curated knowledge is seeded before its first slice.
  */
-async function crawlLocked(db: Db, id: string, opts: ImportOptions, reset: boolean): Promise<LockedCrawl> {
+async function crawlLocked(db: Db, id: string, domain: string, opts: ImportOptions, reset: boolean): Promise<LockedCrawl> {
   const paused = (crawl: CrawlOutcome | null): LockedCrawl => ({ crawl, crawlError: EMBED_LIMIT_PAUSE, stopRun: EMBED_LIMIT_PAUSE });
   if (await embedRailSpent(db, new Date(), opts.limits, 'crawl')) return paused(null);
   // A fresh time per agent: the run's start time could already be past the lock's lifetime.
@@ -203,6 +205,13 @@ async function crawlLocked(db: Db, id: string, opts: ImportOptions, reset: boole
   try {
     if (reset) await resetForCrawl(db, id, new Date());
     else await reopenCrawl(db, id, new Date());
+    if (domain === demoDomain()) {
+      try {
+        await seedDemoKnowledge(db, id, { limits: opts.limits });
+      } catch (err) {
+        console.error(`[import] ${domain}: could not seed the demo knowledge:`, err instanceof Error ? err.message : err);
+      }
+    }
     const deps = createCrawlDeps();
     let outcome = await runCrawl(id, deps);
     while (outcome.status === 'crawling') {
@@ -243,7 +252,7 @@ export async function importLegacyAgents(
     const result: ImportResult = { id: input.id, domain: input.domain, action: placed.action, note: placed.note, crawl: null };
     let stopRun: string | undefined;
     if (placed.wrote && opts.crawl) {
-      const { stopRun: stop, ...crawled } = await crawlLocked(db, input.id, opts, placed.action === 'recrawled');
+      const { stopRun: stop, ...crawled } = await crawlLocked(db, input.id, input.domain, opts, placed.action === 'recrawled');
       Object.assign(result, crawled);
       stopRun = stop;
     }

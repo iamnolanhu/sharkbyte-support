@@ -18,6 +18,8 @@ import {
 } from './legacy-import';
 import { incrementQuota } from '@/lib/db/quota';
 import { railKey } from '@/lib/rails';
+import { demoDomain, KNOWLEDGE_URL } from '@/lib/demo-knowledge';
+import { embedTexts } from '@/lib/embeddings';
 
 /** The per-agent results of an import (the summary's `stopped` is asserted separately). */
 async function importLegacyAgents(db: Db, agents: readonly LegacyAgent[], opts: ImportOptions): Promise<ImportResult[]> {
@@ -25,6 +27,7 @@ async function importLegacyAgents(db: Db, agents: readonly LegacyAgent[], opts: 
 }
 
 vi.mock('@/lib/crawl/run-crawl', () => ({ runCrawl: vi.fn(), createCrawlDeps: vi.fn(() => ({})) }));
+vi.mock('@/lib/embeddings', () => ({ embedTexts: vi.fn() }));
 
 const NOW = new Date('2026-11-05T10:00:00.000Z');
 const limits = getLimits({});
@@ -58,6 +61,8 @@ let db: Db;
 beforeEach(async () => {
   crawl.mockReset();
   crawl.mockResolvedValue(outcome);
+  vi.mocked(embedTexts).mockReset();
+  vi.mocked(embedTexts).mockImplementation(async (texts) => texts.map((_, i) => fakeEmbedding(i + 1)));
   db = await createTestDb();
 }, TEST_DB_TIMEOUT_MS);
 
@@ -362,6 +367,21 @@ describe('importLegacyAgents', () => {
     // Lock was released: it can be taken again.
     expect(await tryLockCrawl(db, ID_A, NOW, limits)).toBe(true);
     await releaseCrawlLock(db, ID_A);
+  });
+
+  it('seeds the demo agent\'s curated knowledge before its crawl, and only for the demo domain', async () => {
+    const demo = demoDomain();
+    await importLegacyAgents(db, [legacy({ uuid: ID_A, domain: demo }), legacy({ uuid: ID_B, domain: 'reef.example' })], {
+      ...opts,
+      crawl: true,
+    });
+    const rows = await db.query<{ agent_id: string; n: number | string }>(
+      'SELECT agent_id, count(*) AS n FROM chunks WHERE url = $1 GROUP BY agent_id',
+      [KNOWLEDGE_URL],
+    );
+    expect(rows.map((r) => r.agent_id)).toEqual([ID_A]);
+    expect(Number(rows[0]?.n)).toBeGreaterThan(5);
+    expect(vi.mocked(embedTexts).mock.invocationCallOrder[0]).toBeLessThan(crawl.mock.invocationCallOrder[0] ?? 0);
   });
 
   it('never imports a domain on the skip list, even on a re-run', async () => {
