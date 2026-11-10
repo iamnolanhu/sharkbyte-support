@@ -23,7 +23,7 @@ import {
 } from '@/lib/chat/chat-event';
 import { createDashFilter } from '@/lib/chat/dash-filter';
 import { addChatTokens, checkChatTokenBudget, checkRail, embedRequestGate, RAIL_COPY } from '@/lib/rails';
-import type { RetrievedChunk } from '@/types';
+import type { AgentRow, RetrievedChunk } from '@/types';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -102,12 +102,50 @@ export const VOICE_GUIDE = `How you talk:
 - If someone is rude or off topic, stay kind and brief and steer back to what you can help with.
 - You are Sammy the shark, but you talk like a normal person. Skip ocean puns and sea wordplay; a light touch in a greeting is the most.`;
 
-/** The agent's instruction first, then the voice guide, then what Sammy knows about the site. */
-export function buildSystemPrompt(instruction: string, chunks: RetrievedChunk[]): string {
+/**
+ * AI companies and models Sammy never names as its maker or engine. Small models fall back on
+ * their training ("I'm a language model trained by NVIDIA researchers") unless told otherwise.
+ */
+export const BANNED_VENDOR_NAMES = [
+  'NVIDIA',
+  'Nemotron',
+  'Google',
+  'Gemini',
+  'OpenAI',
+  'GPT',
+  'Meta',
+  'Llama',
+  'Anthropic',
+  'Claude',
+  'Mistral',
+  'Qwen',
+] as const;
+
+/** The persona name in an agent name such as "Sammy - example.com"; Sammy when there is none. */
+export function personaName(agentName: string): string {
+  return agentName.split(' - ')[0]?.trim() || 'Sammy';
+}
+
+/** Who Sammy is and what it can do, for this agent's site. */
+export function identityGuide(agentName: string, domain: string): string {
+  const name = personaName(agentName);
+  return `Who you are:
+- You are ${name}, the support assistant for ${domain}, built with SharkByte Support (an open-source project by Nolan Hu).
+- When someone asks who made you, what you are or what model you run on, say you are the ${domain} support assistant, built with SharkByte Support, an open-source project by Nolan Hu. Then offer to help with ${domain}.
+- When you talk about yourself, never name an AI company or model (${BANNED_VENDOR_NAMES.join(', ')} or any other), and never call yourself a language model or say you were trained by anyone.
+- When someone asks who made this site or business, answer from what you know about ${domain}; if you don't know, say so. An AI company never made it.
+- When someone asks what you can do, say you help with questions about ${domain}: what we offer, how things work and where to find things. Don't offer general assistant work such as brainstorming ideas or writing help.`;
+}
+
+/** The agent's instruction first, then who Sammy is, the voice guide, and what Sammy knows about the site. */
+export function buildSystemPrompt(
+  agent: Pick<AgentRow, 'name' | 'domain' | 'instruction'>,
+  chunks: RetrievedChunk[],
+): string {
   const known = chunks.length
     ? chunks.map((c) => `## ${c.title}\nLink: ${c.url}\n${c.content}`).join('\n\n')
     : 'Nothing that matches this question.';
-  return `${instruction}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n${known}`;
+  return `${agent.instruction}\n\n${identityGuide(agent.name, agent.domain)}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n${known}`;
 }
 
 export interface HandleChatInput {
@@ -242,7 +280,7 @@ export async function handleChat({ agentId, raw, ip, corsHeaders, meta = SITE_ME
 
   const chunks = await searchChunks(db, agent.id, embedding, limits.retrievalTopK);
   await touchLastUsed(db, agent.id, now);
-  const system = buildSystemPrompt(agent.instruction, chunks);
+  const system = buildSystemPrompt(agent, chunks);
 
   const turn = {
     answer: '',

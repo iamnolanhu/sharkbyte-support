@@ -16,7 +16,15 @@ import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db'
 import type { AgentRow } from '@/types';
 import { POST as chatPost } from '@/app/api/chat/route';
 import { OPTIONS as widgetOptions, POST as widgetPost } from '@/app/api/widget/[agentId]/route';
-import { buildSystemPrompt, handleChat, parseChatRequest, VOICE_GUIDE } from './handle-chat';
+import {
+  BANNED_VENDOR_NAMES,
+  buildSystemPrompt,
+  handleChat,
+  identityGuide,
+  parseChatRequest,
+  personaName,
+  VOICE_GUIDE,
+} from './handle-chat';
 
 vi.mock('@/lib/analytics/server');
 vi.mock('@/lib/embeddings', () => ({ embedTexts: vi.fn() }));
@@ -155,22 +163,26 @@ describe('buildSystemPrompt', () => {
     { url: 'https://a.example/1', title: 'One', content: 'first body', score: 0.9 },
     { url: 'https://a.example/2', title: 'Two', content: 'second body', score: 0.8 },
   ];
+  const agent = { name: 'Sammy - reef.example', domain: 'reef.example', instruction: 'Be Sammy.' };
+  const identity = identityGuide(agent.name, agent.domain);
 
-  it('puts the instruction first, then the voice guide, then each page with its title and link', () => {
-    const prompt = buildSystemPrompt('Be Sammy.', pages);
+  it('puts the instruction first, then who Sammy is, the voice guide, then each page with its title and link', () => {
+    const prompt = buildSystemPrompt(agent, pages);
     expect(prompt).toBe(
-      `Be Sammy.\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n` +
+      `Be Sammy.\n\n${identity}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\n` +
         '## One\nLink: https://a.example/1\nfirst body\n\n' +
         '## Two\nLink: https://a.example/2\nsecond body',
     );
   });
 
   it('says plainly when nothing matched', () => {
-    expect(buildSystemPrompt('Be Sammy.', [])).toBe(`Be Sammy.\n\n${VOICE_GUIDE}\n\nWhat you know:\n\nNothing that matches this question.`);
+    expect(buildSystemPrompt(agent, [])).toBe(
+      `Be Sammy.\n\n${identity}\n\n${VOICE_GUIDE}\n\nWhat you know:\n\nNothing that matches this question.`,
+    );
   });
 
   it('has none of the words that make Sammy hedge or talk about its sources', () => {
-    const prompt = buildSystemPrompt(DEFAULT_INSTRUCTION('reef.example'), pages).toLowerCase();
+    const prompt = buildSystemPrompt({ ...agent, instruction: DEFAULT_INSTRUCTION('reef.example') }, pages).toLowerCase();
     for (const banned of [
       /according to/,
       /based on/,
@@ -181,7 +193,8 @@ describe('buildSystemPrompt', () => {
       /chunk/,
       /document/,
       /retriev/,
-      /\bsources?\b/,
+      // "open-source" (SharkByte Support itself) is not talk about where an answer comes from.
+      /(?<!open-)\bsources?\b/,
       /knowledge base/,
       /rephrase/,
       /[—–]/,
@@ -198,6 +211,38 @@ describe('buildSystemPrompt', () => {
     expect(VOICE_GUIDE).toContain('Never make up facts');
     expect(VOICE_GUIDE).toContain('Share a link only when the visitor asks');
     expect(VOICE_GUIDE).toContain('Never use em dashes or en dashes');
+  });
+});
+
+describe('identityGuide', () => {
+  const guide = identityGuide('Sammy - reef.example', 'reef.example');
+
+  it('makes Sammy the site support assistant built with SharkByte Support', () => {
+    expect(guide).toContain(
+      'You are Sammy, the support assistant for reef.example, built with SharkByte Support (an open-source project by Nolan Hu).',
+    );
+    expect(guide).toContain('When someone asks who made you, what you are or what model you run on');
+    expect(guide).toContain('Then offer to help with reef.example.');
+  });
+
+  it('bans naming a model vendor or calling itself a language model', () => {
+    expect(guide).toContain('never name an AI company or model');
+    for (const vendor of ['NVIDIA', 'Nemotron', 'Google', 'Gemini', 'OpenAI']) {
+      expect(BANNED_VENDOR_NAMES).toContain(vendor);
+      expect(guide).toContain(vendor);
+    }
+    expect(guide).toContain('never call yourself a language model or say you were trained by anyone');
+  });
+
+  it('describes what Sammy can do as help with the site, not general assistant work', () => {
+    expect(guide).toContain('you help with questions about reef.example: what we offer, how things work and where to find things');
+    expect(guide).toContain("Don't offer general assistant work such as brainstorming ideas or writing help.");
+  });
+
+  it('takes the persona name from the agent name', () => {
+    expect(personaName('Sammy - reef.example')).toBe('Sammy');
+    expect(personaName('Finn')).toBe('Finn');
+    expect(personaName(' - reef.example')).toBe('Sammy');
   });
 });
 
