@@ -12,7 +12,7 @@ export const APP_DOMAIN = process.env.APP_DOMAIN
 // Default system instruction for a new Sammy. How Sammy talks (voice, length, what to do when the
 // site does not cover a question) lives in the chat scaffold, buildSystemPrompt in handle-chat.ts.
 export function DEFAULT_INSTRUCTION(domain: string): string {
-  return `You are Sammy, the friendly support agent for ${domain}. You help visitors with questions about ${domain} and what we offer.`;
+  return `You are Sammy, the friendly support agent for ${domain}. You help visitors here with questions about what we offer.`;
 }
 
 /** The DigitalOcean-era default instruction: HEAD, then the domain, then TAIL. */

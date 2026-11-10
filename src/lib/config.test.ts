@@ -40,9 +40,11 @@ describe('envInt', () => {
 });
 
 describe('DEFAULT_INSTRUCTION', () => {
-  it('names Sammy and the domain, with no canned replies or source talk', () => {
+  it('names Sammy and the domain once, with no canned replies or source talk', () => {
     const text = DEFAULT_INSTRUCTION('example.com');
     expect(text.startsWith('You are Sammy, the friendly support agent for example.com.')).toBe(true);
+    // The domain once: Sammy echoes a domain it sees twice in the prompt.
+    expect(text.split('example.com')).toHaveLength(2);
     expect(text).not.toMatch(/rephrase|provided|knowledge base|ONLY/i);
   });
 });

@@ -293,14 +293,21 @@ describe('toneExamples', () => {
     }
   });
 
+  it('answers the paste without a stock "what can I help you with" closer', () => {
+    expect(pairs[5][3]).toBe(
+      "That looks like placeholder text, so there's nothing in it to summarize. If you meant to paste something else, drop it in and we'll take a look.",
+    );
+    expect(examples).not.toMatch(/what can i help you with/i);
+  });
+
   it('deflects the AI question without naming anything and in other words than the voice guide', () => {
     const reply = pairs[1][3];
     expect(reply).not.toMatch(/SharkByte|model|powered|language model/i);
     expect(voiceGuide('Sammy', 'reef.example')).not.toContain(reply);
   });
 
-  it('writes the domain out at most once per reply and uses the persona name', () => {
-    for (const [, , , reply] of pairs) expect(reply.split('reef.example').length - 1, reply).toBeLessThanOrEqual(1);
+  it('never writes the domain out in a reply, and uses the persona name', () => {
+    for (const [, , , reply] of pairs) expect(reply, reply).not.toContain('reef.example');
     expect(pairs[0][3]).toContain("I'm Sammy");
     expect(toneExamples('Finn', 'reef.example')).toContain("I'm Finn");
   });
