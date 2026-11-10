@@ -101,8 +101,12 @@ describe('knowledgeChunks', () => {
     expect(all).toContain('github.com/iamnolanhu/sharkbyte-support');
     expect(all).toContain('30 pages');
     expect(all).not.toMatch(/Sigma Synapses/i);
-    // Sammy never names the AI behind it, so what it knows names none either.
-    for (const vendor of [...BANNED_VENDOR_NAMES, 'Gradient']) expect(all).not.toMatch(new RegExp(`\\b${vendor}\\b`));
+    // Sammy never names the AI behind it, so what it knows names none either (the hackathon's
+    // name is history, not what runs it).
+    for (const vendor of BANNED_VENDOR_NAMES.filter((v) => v !== 'DigitalOcean')) {
+      expect(all).not.toMatch(new RegExp(`\\b${vendor}\\b`));
+    }
+    expect(all).toContain('its own stack of free services');
   });
 });
 

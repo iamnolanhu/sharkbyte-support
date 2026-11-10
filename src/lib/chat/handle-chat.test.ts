@@ -219,6 +219,25 @@ describe('buildSystemPrompt', () => {
     expect(VOICE_GUIDE).toContain('Share a link only when the visitor asks');
     expect(VOICE_GUIDE).toContain('Never use em dashes or en dashes');
   });
+
+  it('makes "we" the first rule, with a before and after', () => {
+    const first = VOICE_GUIDE.split('\n')[1];
+    expect(first).toContain('"we", "our" and "us", never "I", for anything the business does');
+    expect(first).toContain('Before: "I offer a free trial and I can set that up." After: "We offer a free trial, and we can set that up."');
+  });
+
+  it('bans the stock closers by example', () => {
+    expect(VOICE_GUIDE).toContain('End on the answer itself, or on one specific question about what they need.');
+    for (const closer of ['"Let me know if you want to…"', '"How can I help you today?"', '"Feel free to…"', '"I hope this helps"']) {
+      expect(VOICE_GUIDE).toContain(closer);
+    }
+  });
+
+  it('meets rudeness with an acknowledgement, a question and the human contact path', () => {
+    expect(VOICE_GUIDE).toContain(
+      'acknowledge it in a few words, ask what they were trying to do, and if what you know has a way to reach a person',
+    );
+  });
 });
 
 describe('identityGuide', () => {
@@ -228,13 +247,18 @@ describe('identityGuide', () => {
     expect(guide).toContain(
       'You are Sammy, the support assistant for reef.example, built with SharkByte Support (an open-source project by Nolan Hu).',
     );
-    expect(guide).toContain('When someone asks who made you, what you are or what model you run on');
-    expect(guide).toContain('Then offer to help with reef.example.');
+    expect(guide).toContain(
+      'When someone asks who made you, what you are, what model you are or run on, what powers you, or what AI this is',
+    );
+    expect(guide).toContain(
+      'reply like this example and add nothing about what runs you: "I\'m the reef.example support assistant, built with SharkByte Support, an open-source project by Nolan Hu. What are you looking for on reef.example?"',
+    );
   });
 
   it('bans naming a model vendor or calling itself a language model', () => {
-    expect(guide).toContain('never name an AI company or model');
-    for (const vendor of ['NVIDIA', 'Nemotron', 'Google', 'Gemini', 'OpenAI']) {
+    expect(guide).toContain('never name an AI company, cloud or model');
+    expect(guide).toContain('never say you are powered by or run on one');
+    for (const vendor of ['NVIDIA', 'Nemotron', 'Google', 'Gemini', 'OpenAI', 'DigitalOcean', 'Gradient']) {
       expect(BANNED_VENDOR_NAMES).toContain(vendor);
       expect(guide).toContain(vendor);
     }
@@ -244,6 +268,14 @@ describe('identityGuide', () => {
   it('describes what Sammy can do as help with the site, not general assistant work', () => {
     expect(guide).toContain('you help with questions about reef.example: what we offer, how things work and where to find things');
     expect(guide).toContain("Don't offer general assistant work such as brainstorming ideas or writing help.");
+  });
+
+  it('turns away out-of-scope requests in one sentence and asks about the site', () => {
+    expect(guide).toContain('Anything that has nothing to do with reef.example (the weather, pasted text to summarize or translate');
+    expect(guide).toContain(
+      "Say in one plain sentence that we don't do that here, then ask one specific question about what they need from reef.example.",
+    );
+    expect(guide).toContain('never say "I\'m not sure about that one" for something that is simply out of scope');
   });
 
   it('takes the persona name from the agent name', () => {
