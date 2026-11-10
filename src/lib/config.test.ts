@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_INSTRUCTION, envInt, getLimits, LEGACY_DEFAULT_INSTRUCTION, upgradeLegacyInstruction } from '@/lib/config';
+import {
+  DEFAULT_INSTRUCTION,
+  envInt,
+  getLimits,
+  LEGACY_DEFAULT_INSTRUCTION,
+  PREVIOUS_DEFAULT_INSTRUCTION,
+  upgradeLegacyInstruction,
+} from '@/lib/config';
 
 describe('getLimits', () => {
   it('getLimits uses spec defaults', () => {
@@ -54,6 +61,26 @@ describe('upgradeLegacyInstruction', () => {
     expect(upgradeLegacyInstruction(LEGACY_DEFAULT_INSTRUCTION('aria.org.uk'))).toBe(DEFAULT_INSTRUCTION('aria.org.uk'));
     const crlf = LEGACY_DEFAULT_INSTRUCTION('reef.example').replace(/\n/g, '\r\n');
     expect(upgradeLegacyInstruction(`  ${crlf}\n`)).toBe(DEFAULT_INSTRUCTION('reef.example'));
+  });
+
+  it('moves the untouched previous default (domain named twice) to the current default', () => {
+    expect(PREVIOUS_DEFAULT_INSTRUCTION('aria.org.uk')).toBe(
+      'You are Sammy, the friendly support agent for aria.org.uk. You help visitors with questions about aria.org.uk and what we offer.',
+    );
+    expect(upgradeLegacyInstruction(PREVIOUS_DEFAULT_INSTRUCTION('aria.org.uk'))).toBe(DEFAULT_INSTRUCTION('aria.org.uk'));
+    expect(upgradeLegacyInstruction(`  ${PREVIOUS_DEFAULT_INSTRUCTION('reef.example')}\r\n`)).toBe(DEFAULT_INSTRUCTION('reef.example'));
+  });
+
+  it('leaves an edited previous default alone', () => {
+    const previous = PREVIOUS_DEFAULT_INSTRUCTION('reef.example');
+    expect(upgradeLegacyInstruction(`${previous} Always mention our sale.`)).toBeNull();
+    expect(upgradeLegacyInstruction(previous.replace('friendly', 'cheerful'))).toBeNull();
+    expect(
+      upgradeLegacyInstruction(
+        'You are Sammy, the friendly support agent for reef.example. You help visitors with questions about tide.example and what we offer.',
+      ),
+    ).toBeNull();
+    expect(upgradeLegacyInstruction(PREVIOUS_DEFAULT_INSTRUCTION('reef example'))).toBeNull();
   });
 
   it('leaves any edited or custom instruction alone', () => {

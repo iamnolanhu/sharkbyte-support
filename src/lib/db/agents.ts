@@ -155,12 +155,15 @@ export async function updateInstruction(db: Db, id: string, instruction: string)
 }
 
 /**
- * Moves every agent still on the untouched DigitalOcean-era default instruction to the current
- * default; owner-edited instructions stay as they are. Idempotent: returns how many rows changed.
+ * Moves every agent still on an untouched earlier default instruction (DigitalOcean-era or the
+ * previous one) to the current default; owner-edited instructions stay as they are. Idempotent:
+ * returns how many rows changed.
  */
 export async function upgradeLegacyInstructions(db: Db): Promise<number> {
   const rows = await db.query<{ id: string; instruction: string }>(
-    `SELECT id, instruction FROM agents WHERE instruction LIKE '%Could you rephrase your question?%'`,
+    `SELECT id, instruction FROM agents
+     WHERE instruction LIKE '%Could you rephrase your question?%'
+        OR instruction LIKE 'You are Sammy, the friendly support agent for %. You help visitors with questions about %'`,
   );
   let changed = 0;
   for (const row of rows) {

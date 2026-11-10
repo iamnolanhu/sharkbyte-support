@@ -31,15 +31,35 @@ export function LEGACY_DEFAULT_INSTRUCTION(domain: string): string {
   return `${LEGACY_INSTRUCTION_HEAD}${domain}${LEGACY_INSTRUCTION_TAIL}`;
 }
 
+const PREVIOUS_INSTRUCTION_HEAD = 'You are Sammy, the friendly support agent for ';
+const PREVIOUS_INSTRUCTION_MIDDLE = '. You help visitors with questions about ';
+
+/** The default instruction before it named the domain only once (Sammy echoed a domain it saw twice). */
+export function PREVIOUS_DEFAULT_INSTRUCTION(domain: string): string {
+  return `${PREVIOUS_INSTRUCTION_HEAD}${domain}${PREVIOUS_INSTRUCTION_MIDDLE}${domain} and what we offer.`;
+}
+
+/** The domain of an untouched earlier default instruction (DigitalOcean-era or previous), else null. */
+function oldDefaultDomain(text: string): string | null {
+  if (text.startsWith(LEGACY_INSTRUCTION_HEAD) && text.endsWith(LEGACY_INSTRUCTION_TAIL)) {
+    return text.slice(LEGACY_INSTRUCTION_HEAD.length, text.length - LEGACY_INSTRUCTION_TAIL.length);
+  }
+  if (text.startsWith(PREVIOUS_INSTRUCTION_HEAD)) {
+    const end = text.indexOf(PREVIOUS_INSTRUCTION_MIDDLE);
+    const domain = end === -1 ? '' : text.slice(PREVIOUS_INSTRUCTION_HEAD.length, end);
+    if (domain && text === PREVIOUS_DEFAULT_INSTRUCTION(domain)) return domain;
+  }
+  return null;
+}
+
 /**
- * The current default for an instruction that is still the untouched DigitalOcean-era default
- * (any domain); null for anything else, so an owner's own edits are never replaced.
+ * The current default for an instruction that is still an untouched earlier default (the
+ * DigitalOcean-era one or the previous one, any domain); null for anything else, so an owner's own
+ * edits are never replaced.
  */
 export function upgradeLegacyInstruction(instruction: string): string | null {
-  const text = instruction.replace(/\r\n/g, '\n').trim();
-  if (!text.startsWith(LEGACY_INSTRUCTION_HEAD) || !text.endsWith(LEGACY_INSTRUCTION_TAIL)) return null;
-  const domain = text.slice(LEGACY_INSTRUCTION_HEAD.length, text.length - LEGACY_INSTRUCTION_TAIL.length);
-  return /^[^\s]+$/.test(domain) ? DEFAULT_INSTRUCTION(domain) : null;
+  const domain = oldDefaultDomain(instruction.replace(/\r\n/g, '\n').trim());
+  return domain && /^[^\s]+$/.test(domain) ? DEFAULT_INSTRUCTION(domain) : null;
 }
 
 // Free-tier limits: quotas, crawl bounds, chat bounds and retention

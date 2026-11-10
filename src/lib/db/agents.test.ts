@@ -14,7 +14,7 @@ import {
   updateInstruction,
   upgradeLegacyInstructions,
 } from '@/lib/db/agents';
-import { DEFAULT_INSTRUCTION, LEGACY_DEFAULT_INSTRUCTION } from '@/lib/config';
+import { DEFAULT_INSTRUCTION, LEGACY_DEFAULT_INSTRUCTION, PREVIOUS_DEFAULT_INSTRUCTION } from '@/lib/config';
 import { countAllChunks, insertChunksWithinCeiling } from '@/lib/db/chunks';
 import { createTestDb, fakeEmbedding, TEST_DB_TIMEOUT_MS } from '@/test/test-db';
 import type { AgentRow, ChunkInput } from '@/types';
@@ -155,6 +155,24 @@ describe('agents repository', () => {
 });
 
 describe('upgradeLegacyInstructions', () => {
+  it('moves untouched DigitalOcean-era and previous defaults to the current one, leaves custom text, then is a no-op', async () => {
+    const doEra = await newAgent('aria.org.uk');
+    const previous = await newAgent('kelp.example');
+    const editedPrevious = await newAgent('coral.example');
+    const custom = await newAgent('tide.example');
+    await updateInstruction(db, doEra.id, LEGACY_DEFAULT_INSTRUCTION('aria.org.uk'));
+    await updateInstruction(db, previous.id, PREVIOUS_DEFAULT_INSTRUCTION('kelp.example'));
+    const editedText = `${PREVIOUS_DEFAULT_INSTRUCTION('coral.example')} Mention the spring sale.`;
+    await updateInstruction(db, editedPrevious.id, editedText);
+
+    expect(await upgradeLegacyInstructions(db)).toBe(2);
+    expect((await getAgentById(db, doEra.id))?.instruction).toBe(DEFAULT_INSTRUCTION('aria.org.uk'));
+    expect((await getAgentById(db, previous.id))?.instruction).toBe(DEFAULT_INSTRUCTION('kelp.example'));
+    expect((await getAgentById(db, editedPrevious.id))?.instruction).toBe(editedText);
+    expect((await getAgentById(db, custom.id))?.instruction).toBe('Be nice.');
+    expect(await upgradeLegacyInstructions(db)).toBe(0);
+  });
+
   it('replaces only untouched DigitalOcean-era defaults, once', async () => {
     const legacy = await newAgent('aria.org.uk');
     const edited = await newAgent('reef.example');

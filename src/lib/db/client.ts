@@ -127,7 +127,7 @@ function createNeonDb(connectionString: string): Db {
   };
 }
 
-/** Moves agents off the DigitalOcean-era default instruction; a failure only logs (next cold start retries). */
+/** Moves agents off an earlier default instruction; a failure only logs (next cold start retries). */
 async function upgradeInstructions(db: Db): Promise<void> {
   try {
     const changed = await upgradeLegacyInstructions(db);
